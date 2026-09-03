@@ -3,6 +3,8 @@
   "name": "cliproom",
   "compatibility_date": "2026-09-03",
   "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
   "main": "vinext/server/fetch-handler",
   "assets": {
     "directory": "dist/client",
@@ -13,7 +15,7 @@
     {
       "binding": "DB",
       "database_name": "cliproom-db-us",
-      "database_id": "68c28eb0-e4ad-4d50-afd6-af1a7fec19c5"
+      "database_id": "94ede006-d4b3-45cb-900d-3f7356b2e35a"
     }
   ]
 }
