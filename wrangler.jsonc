@@ -12,8 +12,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "cliproom-db",
-      "database_id": "29650a40-8588-4b26-b767-378752e60132"
+      "database_name": "cliproom-db-us",
+      "database_id": "68c28eb0-e4ad-4d50-afd6-af1a7fec19c5"
     }
   ]
 }
