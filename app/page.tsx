@@ -2,7 +2,6 @@
 
 import {
   CheckCircle2,
-  CircleDot,
   Clapperboard,
   Clock3,
   Copy,
@@ -285,6 +284,8 @@ export default function Home() {
   }, [categoryFilter, clips, query]);
 
   const priorityClips = clips.filter((clip) => clip.priority);
+  const activeClips = clips.filter((clip) => clip.status !== "Posted").length;
+  const claimedClips = clips.filter((clip) => clip.assignee !== "Unclaimed").length;
   const counts: Record<CategoryFilter | "posted", number> = {
     all: clips.length,
     social: clips.filter((clip) => clip.category === "social").length,
@@ -490,8 +491,8 @@ export default function Home() {
     return (
       <main className="min-h-screen bg-[#0e0e10] text-white">
         <div className="grid min-h-screen place-items-center bg-[radial-gradient(circle_at_top,rgba(145,70,255,0.3),transparent_420px)] px-4 py-10">
-          <section className="w-full max-w-md rounded-lg border border-white/10 bg-[#18181b] p-5 shadow-2xl shadow-black/40">
-            <div className="mb-6 flex items-center gap-3">
+          <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#18181b] p-5 shadow-2xl shadow-black/40">
+            <div className="mb-5 flex items-center gap-3">
               <div className="grid h-12 w-12 place-items-center rounded-lg bg-[#9146ff] shadow-[0_0_34px_rgba(145,70,255,0.38)]">
                 <Clapperboard aria-hidden="true" size={25} />
               </div>
@@ -501,15 +502,10 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="mb-5">
-              <div className="mb-3 inline-flex h-8 items-center gap-2 rounded-lg border border-[#2dd4bf]/35 bg-[#2dd4bf]/12 px-3 text-xs font-semibold text-[#adfff6]">
-                <ShieldCheck aria-hidden="true" size={15} />
-                Invite-only access
-              </div>
-              <h1 className="text-3xl font-black leading-tight">Enter the room.</h1>
-              <p className="mt-3 text-sm leading-6 text-white/56">
-                Use the email and access code from your invite. The first admin
-                can enter with the setup code.
+            <div className="mb-4">
+              <h1 className="text-2xl font-black leading-tight">Enter ClipRoom</h1>
+              <p className="mt-2 text-sm leading-5 text-white/54">
+                Sign in with your invite email and access code.
               </p>
             </div>
 
@@ -646,48 +642,40 @@ export default function Home() {
                 ))}
               </div>
             </section>
-
-            <section className="mt-5 rounded-lg border border-[#2dd4bf]/25 bg-[#2dd4bf]/10 p-4">
-              <div className="mb-3 flex items-center gap-2 text-[#bcfff7]">
-                <KeyRound aria-hidden="true" size={17} />
-                <p className="text-sm font-semibold">Access model</p>
-              </div>
-              <p className="text-xs leading-5 text-white/58">
-                Trusted editors enter by email and invite code. Admins control
-                priorities; clippers claim the next cut.
-              </p>
-            </section>
           </aside>
 
           <section className="min-w-0">
-            <div className="mb-5 grid overflow-hidden rounded-lg border border-white/10 bg-[#18181b] lg:grid-cols-[minmax(0,1fr)_340px]">
-              <div className="min-w-0 p-5 sm:p-6">
-                <div className="mb-3 flex flex-wrap items-center gap-2">
-                  <span className="inline-flex h-8 items-center gap-2 rounded-lg border border-[#2dd4bf]/35 bg-[#2dd4bf]/12 px-3 text-xs font-semibold text-[#adfff6]">
+            <div className="mb-4 rounded-lg border border-white/10 bg-[#18181b] p-4">
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                <div className="min-w-0">
+                  <span className="inline-flex h-7 items-center gap-2 rounded-lg border border-[#2dd4bf]/35 bg-[#2dd4bf]/12 px-3 text-xs font-semibold text-[#adfff6]">
                     <ShieldCheck aria-hidden="true" size={15} />
                     Invite-only room
                   </span>
-                  <span className="inline-flex h-8 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 text-xs text-white/62">
-                    <CircleDot aria-hidden="true" size={14} />
-                    {clips.length === 1 ? "1 clip ready" : `${clips.length} clips ready`}
-                  </span>
+                  <h1 className="mt-3 text-2xl font-black leading-tight sm:text-3xl">
+                    Review queue
+                  </h1>
+                  <p className="mt-1 text-sm text-white/54">
+                    {activeClips} active, {claimedClips} claimed,{" "}
+                    {priorityClips.length} priority.
+                  </p>
                 </div>
-                <h1 className="max-w-3xl text-3xl font-black leading-[1.05] sm:text-5xl">
-                  Twitch clips, priorities, and claims in one private room.
-                </h1>
-                <p className="mt-4 max-w-2xl text-sm leading-6 text-white/58 sm:text-base">
-                  Review the clip, mark what matters, and let social or news
-                  clippers claim the edit without digging through chat, Discord,
-                  or DMs.
-                </p>
+                <div className="grid grid-cols-3 gap-2 sm:max-w-md xl:w-[360px]">
+                  {[
+                    ["Clips", clips.length],
+                    ["Priority", priorityClips.length],
+                    ["Posted", counts.posted],
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      className="rounded-lg border border-white/10 bg-white/[0.045] px-3 py-2"
+                    >
+                      <p className="text-xs text-white/42">{label}</p>
+                      <p className="mt-1 text-lg font-black">{value}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
-
-              <div
-                aria-label="ClipRoom preview artwork"
-                className="min-h-[240px] bg-cover bg-center lg:min-h-full"
-                role="img"
-                style={{ backgroundImage: "url('/og.png')" }}
-              />
             </div>
 
             <div className="mb-4 rounded-lg border border-white/10 bg-[#18181b] p-4">
@@ -1213,17 +1201,6 @@ export default function Home() {
                   </div>
                 ) : null}
               </div>
-            </section>
-
-            <section className="rounded-lg border border-[#ffcc66]/25 bg-[#ffcc66]/10 p-4">
-              <div className="mb-3 flex items-center gap-2 text-[#ffe2a3]">
-                <CheckCircle2 aria-hidden="true" size={18} />
-                <p className="text-sm font-semibold">Clip workflow</p>
-              </div>
-              <p className="text-xs leading-5 text-white/58">
-                Add clips, pick priorities, let clippers claim edits, then track
-                what has already been posted.
-              </p>
             </section>
           </aside>
         </div>
