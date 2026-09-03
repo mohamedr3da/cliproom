@@ -269,7 +269,10 @@ export default function Home() {
 
     return clips.filter((clip) => {
       const matchesCategory =
-        categoryFilter === "all" || clip.category === categoryFilter;
+        categoryFilter === "all" ||
+        (categoryFilter === "trusted"
+          ? clip.intakeSource === "trusted_sync"
+          : clip.intakeSource === "manual" && clip.category === categoryFilter);
 
       if (!cleanQuery) return matchesCategory;
 
@@ -280,6 +283,8 @@ export default function Home() {
         clip.assignee,
         clip.status,
         clip.category,
+        clip.intakeSource,
+        clip.twitchCreatorLogin ?? "",
       ]
         .join(" ")
         .toLowerCase();
@@ -291,12 +296,17 @@ export default function Home() {
   const priorityClips = clips.filter((clip) => clip.priority);
   const activeClips = clips.filter((clip) => clip.status !== "Posted").length;
   const claimedClips = clips.filter((clip) => clip.assignee !== "Unclaimed").length;
+  const manualClips = clips.filter((clip) => clip.intakeSource === "manual");
+  const trustedSyncedClips = clips.filter(
+    (clip) => clip.intakeSource === "trusted_sync",
+  );
   const counts: Record<CategoryFilter | "posted", number> = {
     all: clips.length,
-    social: clips.filter((clip) => clip.category === "social").length,
-    news: clips.filter((clip) => clip.category === "news").length,
-    gameplay: clips.filter((clip) => clip.category === "gameplay").length,
-    other: clips.filter((clip) => clip.category === "other").length,
+    trusted: trustedSyncedClips.length,
+    social: manualClips.filter((clip) => clip.category === "social").length,
+    news: manualClips.filter((clip) => clip.category === "news").length,
+    gameplay: manualClips.filter((clip) => clip.category === "gameplay").length,
+    other: manualClips.filter((clip) => clip.category === "other").length,
     posted: clips.filter((clip) => clip.status === "Posted").length,
   };
 
@@ -638,6 +648,7 @@ export default function Home() {
               <div className="space-y-1.5">
                 {[
                   ["Library", counts.all],
+                  ["Trusted", counts.trusted],
                   ["Priority", priorityClips.length],
                   ["Access", roomState.memberCount],
                   ["Posted", counts.posted],
@@ -667,7 +678,7 @@ export default function Home() {
                   </h1>
                   <p className="mt-1 text-sm text-white/54">
                     {activeClips} active, {claimedClips} claimed,{" "}
-                    {priorityClips.length} priority.
+                    {priorityClips.length} priority, {counts.trusted} trusted.
                   </p>
                 </div>
                 <div className="grid grid-cols-3 gap-2 sm:max-w-md xl:w-[360px]">
@@ -693,7 +704,7 @@ export default function Home() {
                 <div>
                   <p className="text-sm font-bold">Clip intake</p>
                   <p className="text-xs text-white/42">
-                    Paste a Twitch clip and it appears in the review queue.
+                    Paste a Twitch clip and it appears in the manual queue.
                   </p>
                 </div>
                 <span className="hidden rounded-lg border border-white/10 bg-white/[0.055] px-3 py-1.5 text-xs text-white/50 sm:inline">
@@ -845,6 +856,7 @@ export default function Home() {
                 {filteredClips.map((clip) => {
                   const embedUrl = getTwitchEmbedUrl(clip.url, embedHost);
                   const clipSlug = getTwitchClipSlug(clip.url);
+                  const isTrustedSync = clip.intakeSource === "trusted_sync";
                   const actionLabel = clipActionLabel(
                     clip,
                     currentMember.email,
@@ -893,6 +905,20 @@ export default function Home() {
                         <div className="mb-3 flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <div className="mb-2 flex flex-wrap items-center gap-2">
+                              {isTrustedSync ? (
+                                <span className="inline-flex min-w-0 items-center gap-1 rounded border border-[#2dd4bf]/40 bg-[#2dd4bf]/12 px-2.5 py-1 text-xs font-semibold text-[#b9fff7]">
+                                  <ShieldCheck
+                                    aria-hidden="true"
+                                    className="shrink-0"
+                                    size={12}
+                                  />
+                                  <span className="max-w-[180px] truncate">
+                                    {clip.twitchCreatorLogin
+                                      ? `Trusted: @${clip.twitchCreatorLogin}`
+                                      : "Trusted clipper"}
+                                  </span>
+                                </span>
+                              ) : null}
                               <span
                                 className={`rounded border px-2.5 py-1 text-xs font-semibold ${statusStyles[clip.status]}`}
                               >
@@ -1003,7 +1029,9 @@ export default function Home() {
                 </div>
                 <p className="text-xl font-black">No clips found</p>
                 <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-white/50">
-                  Try a different search or category.
+                  {categoryFilter === "trusted"
+                    ? "Add trusted Twitch usernames, then sync clips from the source channel."
+                    : "Try a different search or category."}
                 </p>
               </div>
             )}
@@ -1166,8 +1194,8 @@ export default function Home() {
                     value={trustedClippersInput}
                   />
                   <p className="mt-2 text-xs leading-5 text-white/42">
-                    Sync only saves clips created by these Twitch users from
-                    twitch.tv/{roomState.sourceChannel}.
+                    Sync saves clips created by these Twitch users into the
+                    Trusted clippers lane.
                   </p>
                 </label>
                 {isAdmin ? (

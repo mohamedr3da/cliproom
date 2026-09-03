@@ -1,5 +1,6 @@
 export type Category = "social" | "news" | "gameplay" | "other";
-export type CategoryFilter = "all" | Category;
+export type ClipIntakeSource = "manual" | "trusted_sync";
+export type CategoryFilter = "all" | "trusted" | Category;
 export type ClipStatus = "New" | "Prioritised" | "Claimed" | "Editing" | "Posted";
 export type MemberRole = "Admin" | "Clipper";
 
@@ -8,6 +9,8 @@ export type Clip = {
   url: string;
   title: string;
   category: Category;
+  intakeSource: ClipIntakeSource;
+  twitchCreatorLogin: string | null;
   status: ClipStatus;
   priority: boolean;
   assignee: string;
@@ -56,6 +59,7 @@ export const categories: { id: Category; label: string }[] = [
 
 export const filters: { id: CategoryFilter; label: string }[] = [
   { id: "all", label: "All clips" },
+  { id: "trusted", label: "Trusted clippers" },
   ...categories,
 ];
 

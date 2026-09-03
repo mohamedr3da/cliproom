@@ -15,6 +15,7 @@ import {
 import type {
   Category,
   Clip,
+  ClipIntakeSource,
   ClipStatus,
   CurrentMember,
   Member,
@@ -38,6 +39,7 @@ type ClipRoomEnv = {
 };
 
 type D1CountRow = { count: number };
+type D1TableInfoRow = { name: string };
 
 type D1MemberRow = {
   id: string;
@@ -54,6 +56,8 @@ type D1ClipRow = {
   url: string;
   title: string;
   category: Category;
+  intake_source?: ClipIntakeSource | null;
+  twitch_creator_login?: string | null;
   status: ClipStatus;
   priority: number;
   assignee: string;
@@ -172,11 +176,15 @@ function expiredSessionCookie(request: Request) {
 }
 
 function clipFromRow(row: D1ClipRow): Clip {
+  const intakeSource = row.intake_source === "trusted_sync" ? "trusted_sync" : "manual";
+
   return {
     id: row.id,
     url: row.url,
     title: row.title,
     category: row.category,
+    intakeSource,
+    twitchCreatorLogin: row.twitch_creator_login ?? null,
     status: row.status,
     priority: Boolean(row.priority),
     assignee: row.assignee,
@@ -300,10 +308,38 @@ async function activeMemberCount(db: D1Database) {
   return row?.count ?? 0;
 }
 
+async function addClipColumnIfMissing(
+  db: D1Database,
+  column: "intake_source" | "twitch_creator_login",
+  definition: string,
+) {
+  const result = await db.prepare("PRAGMA table_info(clips)").all<D1TableInfoRow>();
+  const columns = result.results ?? [];
+
+  if (columns.some((item) => item.name === column)) {
+    return;
+  }
+
+  await db.prepare(`ALTER TABLE clips ADD COLUMN ${column} ${definition}`).run();
+}
+
+async function ensureClipSourceColumns(db: D1Database) {
+  await addClipColumnIfMissing(db, "intake_source", "TEXT NOT NULL DEFAULT 'manual'");
+  await addClipColumnIfMissing(db, "twitch_creator_login", "TEXT");
+  await db
+    .prepare(
+      `CREATE INDEX IF NOT EXISTS idx_clips_intake_source
+       ON clips (intake_source, created_at DESC)`,
+    )
+    .run();
+}
+
 export async function ensureDatabase(db = getDatabase()) {
   for (const statement of schemaStatements) {
     await db.prepare(statement).run();
   }
+
+  await ensureClipSourceColumns(db);
 
   const timestamp = nowIso();
   await db.prepare("DELETE FROM sessions WHERE expires_at <= ?").bind(timestamp).run();
@@ -715,10 +751,11 @@ export async function addClip(
   await db
     .prepare(
       `INSERT INTO clips (
-        id, url, title, category, status, priority, assignee, assignee_member_id,
+        id, url, title, category, intake_source, twitch_creator_login,
+        status, priority, assignee, assignee_member_id,
         notes, created_at, updated_at, created_by, claimed_at, posted_at
       )
-      VALUES (?, ?, ?, ?, 'New', 0, 'Unclaimed', NULL, ?, ?, ?, ?, NULL, NULL)`,
+      VALUES (?, ?, ?, ?, 'manual', NULL, 'New', 0, 'Unclaimed', NULL, ?, ?, ?, ?, NULL, NULL)`,
     )
     .bind(makeId("clip"), url, title, input.category, notes, timestamp, timestamp, actor.id)
     .run();
@@ -942,15 +979,17 @@ export async function syncTwitchClips(actor: CurrentMember) {
     const insert = await db
       .prepare(
         `INSERT OR IGNORE INTO clips (
-          id, url, title, category, status, priority, assignee, assignee_member_id,
+          id, url, title, category, intake_source, twitch_creator_login,
+          status, priority, assignee, assignee_member_id,
           notes, created_at, updated_at, created_by, claimed_at, posted_at
         )
-        VALUES (?, ?, ?, 'other', 'New', 0, 'Unclaimed', NULL, '', ?, ?, ?, NULL, NULL)`,
+        VALUES (?, ?, ?, 'other', 'trusted_sync', ?, 'New', 0, 'Unclaimed', NULL, '', ?, ?, ?, NULL, NULL)`,
       )
       .bind(
         `tw_${clip.id}`,
         clip.url,
         clip.title || "Untitled Twitch clip",
+        normaliseTwitchLogin(clip.creator_name ?? ""),
         clip.created_at || syncTimestamp,
         syncTimestamp,
         actor.id,

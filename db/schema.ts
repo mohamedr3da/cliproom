@@ -22,6 +22,8 @@ export const schemaStatements = [
     url TEXT NOT NULL UNIQUE,
     title TEXT NOT NULL,
     category TEXT NOT NULL CHECK (category IN ('social', 'news', 'gameplay', 'other')),
+    intake_source TEXT NOT NULL DEFAULT 'manual' CHECK (intake_source IN ('manual', 'trusted_sync')),
+    twitch_creator_login TEXT,
     status TEXT NOT NULL CHECK (status IN ('New', 'Prioritised', 'Claimed', 'Editing', 'Posted')),
     priority INTEGER NOT NULL DEFAULT 0,
     assignee TEXT NOT NULL DEFAULT 'Unclaimed',
