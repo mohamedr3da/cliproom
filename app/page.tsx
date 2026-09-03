@@ -61,6 +61,8 @@ type InviteResponse = {
 
 type SyncResponse = {
   state: RoomState;
+  checked: number;
+  matched: number;
   imported: number;
 };
 
@@ -157,6 +159,7 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [channelInput, setChannelInput] = useState("");
+  const [trustedClippersInput, setTrustedClippersInput] = useState("");
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [toast, setToast] = useState("");
   const [embedHost] = useState(() =>
@@ -187,6 +190,7 @@ export default function Home() {
         if (cancelled) return;
         setRoomState(nextState);
         setChannelInput(nextState.sourceChannel);
+        setTrustedClippersInput(nextState.trustedClipperLogins.join(", "));
         setToast(email && code ? "Welcome to ClipRoom." : "Room ready.");
 
         if (email && code) {
@@ -215,6 +219,7 @@ export default function Home() {
   function applyRoomState(nextState: RoomState) {
     setRoomState(nextState);
     setChannelInput(nextState.sourceChannel);
+    setTrustedClippersInput(nextState.trustedClipperLogins.join(", "));
   }
 
   async function signIn(email: string, code: string, fromInvite = false) {
@@ -445,7 +450,10 @@ export default function Home() {
     try {
       const nextState = await apiRequest<RoomState>("/api/cliproom/settings/source", {
         method: "PATCH",
-        body: JSON.stringify({ channel: channelInput }),
+        body: JSON.stringify({
+          channel: channelInput,
+          trustedClippers: trustedClippersInput,
+        }),
       });
       applyRoomState(nextState);
       setToast(`Twitch source set to twitch.tv/${nextState.sourceChannel}.`);
@@ -465,7 +473,9 @@ export default function Home() {
         method: "POST",
       });
       applyRoomState(response.state);
-      setToast(`${response.imported} Twitch clips checked for the room.`);
+      setToast(
+        `Checked ${response.checked} recent clips, matched ${response.matched} trusted clippers, imported ${response.imported} new clips.`,
+      );
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not sync Twitch clips.");
     } finally {
@@ -1121,7 +1131,8 @@ export default function Home() {
                 <div>
                   <p className="text-sm font-semibold">Twitch source</p>
                   <p className="text-xs text-white/44">
-                    twitch.tv/{roomState.sourceChannel}
+                    {roomState.trustedClipperLogins.length} trusted clipper
+                    {roomState.trustedClipperLogins.length === 1 ? "" : "s"}
                   </p>
                 </div>
                 <Clapperboard
@@ -1141,6 +1152,23 @@ export default function Home() {
                     placeholder="channel"
                     value={channelInput}
                   />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-semibold text-white/48">
+                    Trusted clippers
+                  </span>
+                  <input
+                    aria-label="Trusted Twitch clippers"
+                    className="h-11 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-[#2dd4bf] disabled:text-white/48"
+                    disabled={!isAdmin}
+                    onChange={(event) => setTrustedClippersInput(event.target.value)}
+                    placeholder="username, anotherusername"
+                    value={trustedClippersInput}
+                  />
+                  <p className="mt-2 text-xs leading-5 text-white/42">
+                    Sync only saves clips created by these Twitch users from
+                    twitch.tv/{roomState.sourceChannel}.
+                  </p>
                 </label>
                 {isAdmin ? (
                   <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">

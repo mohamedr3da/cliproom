@@ -1,5 +1,3 @@
-import type { Category, ClipStatus } from "@/lib/cliproom/shared";
-
 export const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS members (
     id TEXT PRIMARY KEY,
@@ -50,56 +48,4 @@ export const schemaStatements = [
     ON clips (priority DESC, status, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_clips_category
     ON clips (category, created_at DESC)`,
-];
-
-export type SeedClip = {
-  id: string;
-  url: string;
-  title: string;
-  category: Category;
-  status: ClipStatus;
-  priority: boolean;
-  assignee: string;
-  notes: string;
-  createdAt: string;
-  claimedAt?: string | null;
-  postedAt?: string | null;
-};
-
-export const seedClips: SeedClip[] = [
-  {
-    id: "rawdogmoon-brainy-bold-swan",
-    url: "https://www.twitch.tv/rawdogmoon/clip/BrainyBoldSwanANELE-KvDAGOwztNAVPYGB",
-    title:
-      "Rawdogmoon & aishahsofey get interviewed by a nightcrawler after getting swatted",
-    category: "other",
-    status: "Prioritised",
-    priority: true,
-    assignee: "Unclaimed",
-    notes: "prioritise this",
-    createdAt: "2026-09-03T05:37:00.000Z",
-  },
-  {
-    id: "rawdogmoon-determined-aggressive-donut",
-    url: "https://www.twitch.tv/rawdogmoon/clip/DeterminedAggressiveDonutAllenHuhu-YcG0TUYXbY_CIPwi",
-    title: "rdm test clip 9",
-    category: "gameplay",
-    status: "New",
-    priority: false,
-    assignee: "Unclaimed",
-    notes: "rdm AURA ace or some shit idk sob",
-    createdAt: "2026-09-03T05:36:00.000Z",
-  },
-  {
-    id: "rawdogmoon-witty-rocky-rutabaga",
-    url: "https://www.twitch.tv/rawdogmoon/clip/WittyRockyRutabagaImGlitch-7R_uDIfLBnBbt_ch",
-    title: "rdm test clip 2",
-    category: "social",
-    status: "Claimed",
-    priority: false,
-    assignee: "Assigned",
-    notes: "note for editor 1",
-    createdAt: "2026-09-03T05:34:00.000Z",
-    claimedAt: "2026-09-03T05:34:00.000Z",
-  },
 ];

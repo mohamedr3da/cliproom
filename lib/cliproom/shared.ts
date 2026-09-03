@@ -37,6 +37,7 @@ export type RoomState = {
   clips: Clip[];
   members: Member[];
   sourceChannel: string;
+  trustedClipperLogins: string[];
   memberCount: number;
   maxMembers: number;
   twitchSyncAvailable: boolean;
@@ -78,6 +79,31 @@ export function cleanClipTitle(url: string) {
 
 export function normaliseEmail(email: string) {
   return email.trim().toLowerCase();
+}
+
+export function normaliseTwitchLogin(login: string) {
+  const cleanLogin = login
+    .trim()
+    .replace(/^@/, "")
+    .replace(/^https?:\/\/(www\.)?twitch\.tv\//i, "")
+    .replace(/^twitch\.tv\//i, "")
+    .split(/[/?#]/)[0]
+    .toLowerCase();
+
+  return cleanLogin;
+}
+
+export function parseTwitchLogins(value: string) {
+  const unique = new Set<string>();
+
+  for (const part of value.split(/[,\s]+/)) {
+    const login = normaliseTwitchLogin(part);
+    if (login && /^[a-z0-9_]{1,25}$/.test(login)) {
+      unique.add(login);
+    }
+  }
+
+  return Array.from(unique);
 }
 
 export function getTwitchClipSlug(url: string) {

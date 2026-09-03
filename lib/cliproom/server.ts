@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 
-import { schemaStatements, seedClips } from "@/db/schema";
+import { schemaStatements } from "@/db/schema";
 import {
   cleanClipTitle,
   defaultChannel,
@@ -9,6 +9,8 @@ import {
   isRole,
   maxMembers,
   normaliseEmail,
+  normaliseTwitchLogin,
+  parseTwitchLogins,
 } from "@/lib/cliproom/shared";
 import type {
   Category,
@@ -23,6 +25,10 @@ import type {
 const sessionCookieName = "cliproom_session";
 const sessionDays = 30;
 const encoder = new TextEncoder();
+const trustedClipperSettingKey = "trusted_clipper_logins";
+const lastTwitchSyncSettingKey = "last_twitch_sync_at";
+const firstTwitchSyncWindowHours = 24;
+const twitchSyncOverlapHours = 2;
 
 type ClipRoomEnv = {
   DB?: D1Database;
@@ -75,6 +81,8 @@ type TwitchClip = {
   url: string;
   title: string;
   created_at: string;
+  creator_id?: string;
+  creator_name?: string;
 };
 
 export class HttpError extends Error {
@@ -221,6 +229,59 @@ async function setSetting(db: D1Database, key: string, value: string) {
     .run();
 }
 
+async function getTrustedClipperLogins(db: D1Database) {
+  const rawValue = await getSetting(db, trustedClipperSettingKey);
+  if (!rawValue) return [];
+
+  try {
+    const parsed = JSON.parse(rawValue) as unknown;
+    if (Array.isArray(parsed)) {
+      return parseTwitchLogins(parsed.filter((item) => typeof item === "string").join(","));
+    }
+  } catch {
+    return parseTwitchLogins(rawValue);
+  }
+
+  return [];
+}
+
+async function setTrustedClipperLogins(db: D1Database, logins: string[]) {
+  await setSetting(db, trustedClipperSettingKey, JSON.stringify(logins));
+}
+
+function parseTrustedClipperInput(input: unknown) {
+  if (typeof input === "undefined") return null;
+
+  if (typeof input === "string") {
+    return parseTwitchLogins(input);
+  }
+
+  if (Array.isArray(input)) {
+    return parseTwitchLogins(
+      input.filter((item) => typeof item === "string").join(","),
+    );
+  }
+
+  throw new HttpError(400, "Trusted clippers must be Twitch usernames.");
+}
+
+function getSyncWindowStartedAt(lastSyncAt: string | null) {
+  const latestFallbackStart =
+    Date.now() - firstTwitchSyncWindowHours * 60 * 60 * 1000;
+
+  if (!lastSyncAt) {
+    return new Date(latestFallbackStart).toISOString();
+  }
+
+  const lastSyncTime = Date.parse(lastSyncAt);
+  if (Number.isNaN(lastSyncTime)) {
+    return new Date(latestFallbackStart).toISOString();
+  }
+
+  const overlapStart = lastSyncTime - twitchSyncOverlapHours * 60 * 60 * 1000;
+  return new Date(Math.max(overlapStart, latestFallbackStart)).toISOString();
+}
+
 async function activeAdminCount(db: D1Database) {
   const row = await db
     .prepare(
@@ -252,39 +313,9 @@ export async function ensureDatabase(db = getDatabase()) {
     await setSetting(db, "source_channel", defaultChannel);
   }
 
-  const clipCount = await db
-    .prepare("SELECT COUNT(*) AS count FROM clips")
-    .first<D1CountRow>();
-
-  if ((clipCount?.count ?? 0) === 0) {
-    const inserts = seedClips.map((clip) =>
-      db
-        .prepare(
-          `INSERT OR IGNORE INTO clips (
-            id, url, title, category, status, priority, assignee, assignee_member_id,
-            notes, created_at, updated_at, created_by, claimed_at, posted_at
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          clip.id,
-          clip.url,
-          clip.title,
-          clip.category,
-          clip.status,
-          clip.priority ? 1 : 0,
-          clip.assignee,
-          null,
-          clip.notes,
-          clip.createdAt,
-          clip.createdAt,
-          null,
-          clip.claimedAt ?? null,
-          clip.postedAt ?? null,
-        ),
-    );
-
-    await db.batch(inserts);
+  const trustedClippers = await getSetting(db, trustedClipperSettingKey);
+  if (!trustedClippers) {
+    await setTrustedClipperLogins(db, []);
   }
 
   await db.prepare("PRAGMA optimize").run();
@@ -433,6 +464,7 @@ export async function getRoomState(member: CurrentMember): Promise<RoomState> {
     clips: clipRows.results.map(clipFromRow),
     members: memberRows.results.map(memberFromRow),
     sourceChannel,
+    trustedClipperLogins: await getTrustedClipperLogins(db),
     memberCount: await activeMemberCount(db),
     maxMembers,
     twitchSyncAvailable: Boolean(
@@ -789,21 +821,31 @@ export async function deleteClip(actor: CurrentMember, clipId: string) {
   return getRoomState(actor);
 }
 
-export async function setSourceChannel(actor: CurrentMember, channel: unknown) {
+export async function setSourceChannel(
+  actor: CurrentMember,
+  channel: unknown,
+  trustedClippers?: unknown,
+) {
   requireAdmin(actor);
 
   if (typeof channel !== "string") {
     throw new HttpError(400, "Twitch channel is required.");
   }
 
-  const cleanChannel = channel.trim().replace(/^@/, "").replace(/^twitch\.tv\//i, "");
-  if (!cleanChannel) {
+  const cleanChannel = normaliseTwitchLogin(channel);
+  if (!cleanChannel || !/^[a-z0-9_]{1,25}$/.test(cleanChannel)) {
     throw new HttpError(400, "Twitch channel is required.");
   }
 
   const db = getDatabase();
   await ensureDatabase(db);
   await setSetting(db, "source_channel", cleanChannel);
+
+  const trustedClipperLogins = parseTrustedClipperInput(trustedClippers);
+  if (trustedClipperLogins) {
+    await setTrustedClipperLogins(db, trustedClipperLogins);
+  }
+
   return getRoomState(actor);
 }
 
@@ -861,6 +903,12 @@ export async function syncTwitchClips(actor: CurrentMember) {
   await ensureDatabase(db);
 
   const sourceChannel = (await getSetting(db, "source_channel")) ?? defaultChannel;
+  const trustedClipperLogins = await getTrustedClipperLogins(db);
+  if (trustedClipperLogins.length === 0) {
+    throw new HttpError(400, "Add at least one trusted Twitch clipper before syncing.");
+  }
+
+  const trustedClipperSet = new Set(trustedClipperLogins);
   const accessToken = await getTwitchAccessToken();
   const userData = await twitchFetch<{ data: { id: string }[] }>(
     `users?login=${encodeURIComponent(sourceChannel)}`,
@@ -872,14 +920,26 @@ export async function syncTwitchClips(actor: CurrentMember) {
     throw new HttpError(404, "Twitch could not find that channel.");
   }
 
+  const syncTimestamp = nowIso();
+  const startedAt = getSyncWindowStartedAt(
+    await getSetting(db, lastTwitchSyncSettingKey),
+  );
   const clipData = await twitchFetch<{ data: TwitchClip[] }>(
-    `clips?broadcaster_id=${encodeURIComponent(broadcasterId)}&first=20`,
+    `clips?broadcaster_id=${encodeURIComponent(
+      broadcasterId,
+    )}&first=100&started_at=${encodeURIComponent(
+      startedAt,
+    )}&ended_at=${encodeURIComponent(syncTimestamp)}`,
     accessToken,
   );
 
-  const timestamp = nowIso();
-  const inserts = clipData.data.map((clip) =>
-    db
+  const trustedClips = clipData.data.filter((clip) =>
+    trustedClipperSet.has(normaliseTwitchLogin(clip.creator_name ?? "")),
+  );
+
+  let imported = 0;
+  for (const clip of trustedClips) {
+    const insert = await db
       .prepare(
         `INSERT OR IGNORE INTO clips (
           id, url, title, category, status, priority, assignee, assignee_member_id,
@@ -891,18 +951,21 @@ export async function syncTwitchClips(actor: CurrentMember) {
         `tw_${clip.id}`,
         clip.url,
         clip.title || "Untitled Twitch clip",
-        clip.created_at || timestamp,
-        timestamp,
+        clip.created_at || syncTimestamp,
+        syncTimestamp,
         actor.id,
-      ),
-  );
+      )
+      .run();
 
-  if (inserts.length > 0) {
-    await db.batch(inserts);
+    imported += insert.meta.changes;
   }
+
+  await setSetting(db, lastTwitchSyncSettingKey, syncTimestamp);
 
   return {
     state: await getRoomState(actor),
-    imported: clipData.data.length,
+    checked: clipData.data.length,
+    matched: trustedClips.length,
+    imported,
   };
 }
