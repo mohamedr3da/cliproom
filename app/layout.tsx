@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://cliproom.pages.dev';
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://cliproom.seven.workers.dev';
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),

@@ -44,7 +44,7 @@ export type RoomState = {
 
 export const maxMembers = 20;
 export const defaultChannel = "rawdogmoon";
-export const defaultEmbedHost = "cliproom.pages.dev";
+export const defaultEmbedHost = "cliproom.seven.workers.dev";
 
 export const categories: { id: Category; label: string }[] = [
   { id: "social", label: "Social" },
