@@ -13,7 +13,7 @@
     {
       "binding": "DB",
       "database_name": "cliproom-db",
-      "database_id": "replace-with-cloudflare-d1-database-id"
+      "database_id": "29650a40-8588-4b26-b767-378752e60132"
     }
   ]
 }
