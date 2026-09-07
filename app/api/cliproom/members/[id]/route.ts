@@ -1,4 +1,10 @@
-import { jsonError, jsonOk, removeMember, requireMember } from "@/lib/cliproom/server";
+import {
+  assertMutationRequest,
+  jsonError,
+  jsonOk,
+  removeMember,
+  requireMember,
+} from "@/lib/cliproom/server";
 
 export const dynamic = "force-dynamic";
 
@@ -6,6 +12,7 @@ type RouteContext = { params: Promise<{ id: string }> | { id: string } };
 
 export async function DELETE(request: Request, context: RouteContext) {
   try {
+    assertMutationRequest(request);
     const member = await requireMember(request);
     const params = await context.params;
     return jsonOk(await removeMember(member, params.id));

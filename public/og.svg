@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none">
+  <rect width="1200" height="630" fill="#0c0b10"/>
+  <rect width="1200" height="6" fill="#9146ff"/>
+  <path d="M84 487H1116" stroke="#ffffff" stroke-opacity=".1"/>
+  <text x="84" y="109" fill="#a293b8" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="600" letter-spacing="4">PRIVATE CREATOR WORKSPACE</text>
+  <g transform="translate(84 194) scale(1.875)">
+    <rect width="64" height="64" rx="17" fill="#9146ff"/>
+    <g transform="translate(12 12) scale(1.666667)" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m12.296 3.464 3.02 3.956"/>
+      <path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z"/>
+      <path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+      <path d="m6.18 5.276 3.1 3.899"/>
+    </g>
+  </g>
+  <text x="242" y="291" fill="#faf9fc" font-family="Segoe UI, Arial, sans-serif" font-size="112" font-weight="700">ClipRoom</text>
+  <text x="84" y="397" fill="#c9c2d5" font-family="Segoe UI, Arial, sans-serif" font-size="48" font-weight="400">Your team’s clip queue</text>
+  <text x="84" y="548" fill="#92899f" font-family="Segoe UI, Arial, sans-serif" font-size="23">Review. Organise. Create.</text>
+  <text x="1116" y="548" text-anchor="end" fill="#bfa0ed" font-family="Segoe UI, Arial, sans-serif" font-size="23" font-weight="600">Twitch + Kick</text>
+</svg>

@@ -1,44 +1,70 @@
 "use client";
+/* eslint-disable @next/next/no-img-element */
 
 import {
-  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clapperboard,
-  Clock3,
-  Copy,
+  ClipboardList,
   Crown,
-  ExternalLink,
   Flame,
-  KeyRound,
   LogOut,
-  Mail,
   Plus,
   RefreshCw,
-  Search,
   ShieldCheck,
   Sparkles,
-  Star,
-  Tags,
   Trash2,
   UserRound,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent, KeyboardEvent } from "react";
 
+import { CollectionCard } from "@/components/cliproom/CollectionCard";
+import {
+  CollectionIntake,
+  type CollectionCreateInput,
+} from "@/components/cliproom/CollectionIntake";
+import { ClipPreviewProvider } from "@/components/cliproom/ClipPreviewProvider";
+import { formatUserDate } from "@/components/cliproom/date-format";
+import { QueueSearchControls } from "@/components/cliproom/QueueSearchControls";
+import { RecentlyDeleted } from "@/components/cliproom/RecentlyDeleted";
+import { applyRoomMutation, type ClientRoomMutation } from "@/lib/cliproom/room-mutations";
+import { StandaloneClipCard } from "@/components/cliproom/StandaloneClipCard";
+import {
+  defaultQueueViewOptions,
+  type QueueViewOptions,
+  sortQueueTasks,
+  parseTaskLinkTarget,
+  taskDomId,
+  taskMatchesOptions,
+  getQueueCounts,
+  getQueueTasks,
+  taskMatchesFilter,
+  taskMatchesQuery,
+} from "@/lib/cliproom/task-helpers";
 import {
   categories,
   defaultEmbedHost,
+  defaultTaskNotes,
   filters,
-  getTwitchClipSlug,
-  getTwitchEmbedUrl,
+  maxClipNotesLength,
+  maxClipTitleLength,
+  maxClipUrlLength,
+  maxTrustedClippersTextLength,
+  maxTwitchLoginLength,
+  supportedClipUrlsMatch,
 } from "@/lib/cliproom/shared";
 import type {
+  AuthStatus,
   Category,
   CategoryFilter,
   Clip,
-  ClipStatus,
+  Collection,
   Member,
   MemberRole,
   RoomState,
+  RoomMutation,
 } from "@/lib/cliproom/shared";
 
 type ClipForm = {
@@ -48,15 +74,8 @@ type ClipForm = {
   category: Category;
 };
 
-type AuthForm = {
-  email: string;
-  code: string;
-};
-
-type InviteResponse = {
-  state: RoomState;
-  inviteCode: string;
-  inviteUrl: string;
+type TwitchStartResponse = {
+  authorizationUrl: string;
 };
 
 type SyncResponse = {
@@ -69,20 +88,24 @@ type SyncResponse = {
 const emptyClipForm: ClipForm = {
   url: "",
   title: "",
-  notes: "",
+  notes: defaultTaskNotes,
   category: "social",
 };
 
 const emptyClips: Clip[] = [];
+const emptyCollections: Collection[] = [];
 const emptyMembers: Member[] = [];
+const rightPanelsStorageKey = "cliproom:right-panels-collapsed";
+const pendingTaskLinkStorageKey = "cliproom:pending-task-link";
 
-const statusStyles: Record<ClipStatus, string> = {
-  New: "border-[#2dd4bf]/45 bg-[#2dd4bf]/12 text-[#b9fff7]",
-  Prioritised: "border-[#facc15]/45 bg-[#facc15]/12 text-[#fff4b0]",
-  Claimed: "border-white/16 bg-white/8 text-white/72",
-  Editing: "border-[#9146ff]/45 bg-[#9146ff]/14 text-[#e1d2ff]",
-  Posted: "border-[#6ee7b7]/45 bg-[#6ee7b7]/12 text-[#c8ffe6]",
-};
+class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
 
 async function apiRequest<T>(path: string, init?: RequestInit) {
   const response = await fetch(path, {
@@ -102,66 +125,50 @@ async function apiRequest<T>(path: string, init?: RequestInit) {
       data && typeof data === "object" && "error" in data
         ? String((data as { error: unknown }).error)
         : "ClipRoom could not complete that request.";
-    throw new Error(message);
+    throw new ApiError(response.status, message);
   }
 
   return data as T;
 }
 
-function formatDate(value: string | null) {
-  if (!value) return "Not yet";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+let taskRequestSequence = 0;
+let pendingTaskRequests = 0;
+async function apiTaskRequest(path: string, init: RequestInit) {
+  const clientSequence = ++taskRequestSequence;
+  pendingTaskRequests++;
+  try {
+    const response = await apiRequest<RoomState | RoomMutation>(path, { ...init, headers: { ...init.headers, "X-ClipRoom-Mutation": "1" } });
+    return "kind" in response ? { ...response, clientSequence } : response;
+  } finally { pendingTaskRequests--; }
 }
 
-function clipActionLabel(clip: Clip, currentEmail: string, isAdmin: boolean) {
-  const claimedByOther =
-    clip.assignee !== "Unclaimed" && clip.assignee !== currentEmail && !isAdmin;
-
-  if (clip.status === "Posted") return "Posted";
-  if (claimedByOther) return "Claimed";
-  if (clip.status === "New" || clip.status === "Prioritised") return "Claim";
-  if (clip.status === "Claimed") return "Start edit";
-  return "Mark posted";
-}
-
-function categoryLabel(category: Category) {
-  return categories.find((item) => item.id === category)?.label ?? "Other";
-}
-
-function getInviteParams() {
-  if (typeof window === "undefined") {
-    return { email: "", code: "" };
-  }
-
-  const params = new URLSearchParams(window.location.search);
-  return {
-    email: params.get("email") ?? "",
-    code: params.get("code") ?? params.get("invite") ?? "",
-  };
+function submitParentFormOnEnter(event: KeyboardEvent<HTMLButtonElement>) {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  event.currentTarget.form?.requestSubmit();
 }
 
 export default function Home() {
   const [initialising, setInitialising] = useState(true);
   const [roomState, setRoomState] = useState<RoomState | null>(null);
-  const [authForm, setAuthForm] = useState<AuthForm>(() => getInviteParams());
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [setupCode, setSetupCode] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [clipForm, setClipForm] = useState<ClipForm>(emptyClipForm);
-  const [memberEmail, setMemberEmail] = useState("");
+  const [memberUsername, setMemberUsername] = useState("");
   const [memberRole, setMemberRole] = useState<MemberRole>("Clipper");
   const [query, setQuery] = useState("");
+  const [viewOptions, setViewOptions] = useState<QueueViewOptions>({ ...defaultQueueViewOptions });
+  const [lastDeleted, setLastDeleted] = useState<{ kind: "clip" | "collection"; id: string; title: string } | null>(null);
+  const [restoreCandidate, setRestoreCandidate] = useState<Clip | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [channelInput, setChannelInput] = useState("");
   const [trustedClippersInput, setTrustedClippersInput] = useState("");
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [toast, setToast] = useState("");
+  const [intakeMode, setIntakeMode] = useState<"clip" | "collection" | null>(null);
+  const [rightPanelsCollapsed, setRightPanelsCollapsed] = useState(false);
+  const handledTaskLinkRef = useRef<string | null>(null);
   const [embedHost] = useState(() =>
     typeof window === "undefined"
       ? defaultEmbedHost
@@ -169,40 +176,82 @@ export default function Home() {
   );
 
   const clips = roomState?.clips ?? emptyClips;
+  const collections = roomState?.collections ?? emptyCollections;
   const members = roomState?.members ?? emptyMembers;
   const currentMember = roomState?.member ?? null;
   const isAdmin = currentMember?.role === "Admin";
 
   useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      try {
+        setRightPanelsCollapsed(window.localStorage.getItem(rightPanelsStorageKey) === "true");
+      } catch {
+        // Local storage is optional; the sidebar still works for this session.
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
-    const { email, code } = getInviteParams();
 
     async function initialiseRoom() {
-      try {
-        const nextState =
-          email && code
-            ? await apiRequest<RoomState>("/api/cliproom/auth", {
-                method: "POST",
-                body: JSON.stringify({ email, code }),
-              })
-            : await apiRequest<RoomState>("/api/cliproom");
+      const searchParams = new URLSearchParams(window.location.search);
+      if (
+        searchParams.has("state") &&
+        (searchParams.has("code") || searchParams.has("error"))
+      ) {
+        const callbackUrl = new URL(
+          "/api/cliproom/auth/twitch/callback",
+          window.location.origin,
+        );
+        callbackUrl.search = window.location.search;
+        window.location.replace(callbackUrl.toString());
+        return;
+      }
 
+      const authError = searchParams.get("auth_error");
+      const requestedTask = searchParams.get("task");
+      if (requestedTask) {
+        try { window.sessionStorage.setItem(pendingTaskLinkStorageKey, requestedTask); } catch { /* optional */ }
+      }
+
+      try {
+        const nextState = await apiRequest<RoomState>("/api/cliproom");
         if (cancelled) return;
         setRoomState(nextState);
         setChannelInput(nextState.sourceChannel);
         setTrustedClippersInput(nextState.trustedClipperLogins.join(", "));
-        setToast(email && code ? "Welcome to ClipRoom." : "Room ready.");
-
-        if (email && code) {
-          window.history.replaceState({}, "", window.location.pathname);
-        }
+        setToast("Room ready.");
       } catch (error) {
         if (cancelled) return;
         setRoomState(null);
-        if (email && code) {
-          setToast(
-            error instanceof Error ? error.message : "Could not enter ClipRoom.",
-          );
+        try {
+          const status = await apiRequest<AuthStatus>("/api/cliproom/auth");
+          if (!cancelled) setAuthStatus(status);
+        } catch (statusError) {
+          if (!cancelled) {
+            setToast(
+              statusError instanceof Error
+                ? statusError.message
+                : "Could not check Twitch login.",
+            );
+          }
+        }
+
+        if (authError) {
+          const messages: Record<string, string> = {
+            cancelled: "Twitch sign-in was cancelled.",
+            not_invited: "This Twitch account does not have access to this ClipRoom.",
+            setup_changed: "The first-admin setup changed. Try signing in again.",
+            expired: "That Twitch sign-in expired. Try again.",
+            rate_limited: "Too many sign-in attempts. Try again in a minute.",
+            twitch_failed: "Twitch sign-in could not be completed. Try again.",
+          };
+          setToast(messages[authError] ?? "Twitch sign-in could not be completed.");
+          window.history.replaceState({}, "", window.location.pathname);
+        } else if (!(error instanceof ApiError && error.status === 401)) {
+          setToast(error instanceof Error ? error.message : "Could not open ClipRoom.");
         }
       } finally {
         if (!cancelled) setInitialising(false);
@@ -210,52 +259,126 @@ export default function Home() {
     }
 
     void initialiseRoom();
-
     return () => {
       cancelled = true;
     };
   }, []);
 
-  function applyRoomState(nextState: RoomState) {
+  useEffect(() => {
+    if (!roomState?.member.id) return;
+
+    let checking = false;
+    async function recheckAccess() {
+      if (checking) return;
+      checking = true;
+      const sequence = taskRequestSequence;
+      const wasMutating = pendingTaskRequests > 0;
+      try {
+        const nextState = await apiRequest<RoomState>("/api/cliproom");
+        if (wasMutating || pendingTaskRequests > 0 || sequence !== taskRequestSequence) return;
+        setRoomState(nextState);
+        setChannelInput(nextState.sourceChannel);
+        setTrustedClippersInput(nextState.trustedClipperLogins.join(", "));
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {
+          setRoomState(null);
+          try {
+            setAuthStatus(await apiRequest<AuthStatus>("/api/cliproom/auth"));
+          } catch {
+            setAuthStatus(null);
+          }
+          setToast("You no longer have access to this ClipRoom.");
+        }
+      } finally {
+        checking = false;
+      }
+    }
+
+    window.addEventListener("focus", recheckAccess);
+    return () => window.removeEventListener("focus", recheckAccess);
+  }, [roomState?.member.id]);
+
+  useEffect(() => {
+    if (!roomState) return;
+    const expiries = [...roomState.clips, ...roomState.collections]
+      .filter((task) => task.status === "Posted" && task.postedAt)
+      .map((task) => Date.parse(task.postedAt!) + 24 * 60 * 60 * 1000)
+      .concat([...(roomState.trash?.clips ?? []), ...(roomState.trash?.collections ?? [])].map((task) => Date.parse(task.deletedAt ?? "") + 24 * 60 * 60 * 1000))
+      .filter(Number.isFinite);
+    if (!expiries.length) return;
+    let cancelled = false;
+    let timer: number;
+    async function refreshAfterExpiry() {
+      const sequence = taskRequestSequence;
+      const wasMutating = pendingTaskRequests > 0;
+      try {
+        const nextState = await apiRequest<RoomState>("/api/cliproom");
+        if (wasMutating || pendingTaskRequests > 0 || sequence !== taskRequestSequence) {
+          if (!cancelled) timer = window.setTimeout(refreshAfterExpiry, 1000);
+          return;
+        }
+        if (!cancelled) setRoomState(nextState);
+      } catch {
+        if (!cancelled) timer = window.setTimeout(refreshAfterExpiry, 60000);
+      }
+    }
+    timer = window.setTimeout(refreshAfterExpiry, Math.min(2147483647, Math.max(1000, Math.min(...expiries) - Date.now() + 1000)));
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [roomState]);
+
+  function applyRoomState(nextState: RoomState | ClientRoomMutation) {
+    if ("kind" in nextState && nextState.kind === "mutation") {
+      setRoomState((current) => current ? applyRoomMutation(current, nextState) : current);
+      return;
+    }
+    if (!("member" in nextState)) return;
     setRoomState(nextState);
     setChannelInput(nextState.sourceChannel);
     setTrustedClippersInput(nextState.trustedClipperLogins.join(", "));
   }
 
-  async function signIn(email: string, code: string, fromInvite = false) {
+  function updateTaskOptimistically(task: Clip | Collection, changes: Partial<Clip>) {
+    const optimisticTask = { ...task, ...changes };
+    const isCollection = "clips" in task;
+    setRoomState((current) => current ? isCollection
+      ? { ...current, collections: current.collections.map((item) => item.id === task.id ? optimisticTask as Collection : item) }
+      : { ...current, clips: current.clips.map((item) => item.id === task.id ? optimisticTask as Clip : item) }
+      : current);
+    return () => setRoomState((current) => current ? isCollection
+      ? { ...current, collections: current.collections.map((item) => item === optimisticTask ? task as Collection : item) }
+      : { ...current, clips: current.clips.map((item) => item === optimisticTask ? task as Clip : item) }
+      : current);
+  }
+
+  async function handleTwitchAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!authStatus?.configured) return;
+
     setAuthBusy(true);
     setToast("");
     try {
-      const nextState = await apiRequest<RoomState>("/api/cliproom/auth", {
-        method: "POST",
-        body: JSON.stringify({ email, code }),
-      });
-      applyRoomState(nextState);
-      setToast("Welcome to ClipRoom.");
-
-      if (fromInvite) {
-        window.history.replaceState({}, "", window.location.pathname);
-      }
+      const response = await apiRequest<TwitchStartResponse>(
+        "/api/cliproom/auth/twitch",
+        {
+          method: "POST",
+          body: JSON.stringify({ setupCode: authStatus.needsSetup ? setupCode : undefined }),
+        },
+      );
+      window.location.assign(response.authorizationUrl);
     } catch (error) {
-      setRoomState(null);
-      setToast(error instanceof Error ? error.message : "Could not enter ClipRoom.");
-    } finally {
+      setToast(error instanceof Error ? error.message : "Could not start Twitch sign-in.");
       setAuthBusy(false);
-      setInitialising(false);
     }
-  }
-
-  async function handleAuth(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    await signIn(authForm.email, authForm.code);
   }
 
   async function signOut() {
     setBusyAction("signout");
     try {
       await apiRequest<{ ok: true }>("/api/cliproom/auth", { method: "DELETE" });
+      const status = await apiRequest<AuthStatus>("/api/cliproom/auth");
+      setAuthStatus(status);
       setRoomState(null);
-      setAuthForm((current) => ({ ...current, code: "" }));
+      setSetupCode("");
       setToast("Signed out.");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not sign out.");
@@ -264,76 +387,112 @@ export default function Home() {
     }
   }
 
-  const filteredClips = useMemo(() => {
-    const cleanQuery = query.trim().toLowerCase();
-
-    return clips.filter((clip) => {
-      const matchesCategory =
-        categoryFilter === "all" ||
-        (categoryFilter === "trusted"
-          ? clip.intakeSource === "trusted_sync"
-          : clip.intakeSource === "manual" && clip.category === categoryFilter);
-
-      if (!cleanQuery) return matchesCategory;
-
-      const haystack = [
-        clip.title,
-        clip.url,
-        clip.notes,
-        clip.assignee,
-        clip.status,
-        clip.category,
-        clip.intakeSource,
-        clip.twitchCreatorLogin ?? "",
-      ]
-        .join(" ")
-        .toLowerCase();
-
-      return matchesCategory && haystack.includes(cleanQuery);
-    });
-  }, [categoryFilter, clips, query]);
-
-  const priorityClips = clips.filter((clip) => clip.priority);
-  const activeClips = clips.filter((clip) => clip.status !== "Posted").length;
-  const claimedClips = clips.filter((clip) => clip.assignee !== "Unclaimed").length;
-  const manualClips = clips.filter((clip) => clip.intakeSource === "manual");
-  const trustedSyncedClips = clips.filter(
-    (clip) => clip.intakeSource === "trusted_sync",
+  const queueTasks = useMemo(
+    () => getQueueTasks({ clips, collections }),
+    [clips, collections],
+  );
+  const filteredTasks = useMemo(
+    () =>
+      sortQueueTasks(queueTasks.filter(
+        (task) =>
+          taskMatchesFilter(task, categoryFilter, currentMember?.username ?? "") && taskMatchesQuery(task, query) && taskMatchesOptions(task, viewOptions, currentMember?.username ?? ""),
+      ), viewOptions.sort),
+    [categoryFilter, query, queueTasks, viewOptions, currentMember?.username],
+  );
+  const hasViewOptions = Object.keys(defaultQueueViewOptions).some((key) => viewOptions[key as keyof QueueViewOptions] !== defaultQueueViewOptions[key as keyof QueueViewOptions]);
+  const queueCounts = useMemo(() => getQueueCounts(queueTasks, currentMember?.username ?? ""), [queueTasks, currentMember?.username]);
+  const priorityTasks = useMemo(
+    () =>
+      queueTasks.filter((task) =>
+        task.kind === "clip" ? task.clip.priority : task.collection.priority,
+      ),
+    [queueTasks],
   );
   const counts: Record<CategoryFilter | "posted", number> = {
-    all: clips.length,
-    trusted: trustedSyncedClips.length,
-    social: manualClips.filter((clip) => clip.category === "social").length,
-    news: manualClips.filter((clip) => clip.category === "news").length,
-    gameplay: manualClips.filter((clip) => clip.category === "gameplay").length,
-    other: manualClips.filter((clip) => clip.category === "other").length,
-    posted: clips.filter((clip) => clip.status === "Posted").length,
+    all: queueCounts.all,
+    mine: queueCounts.mine,
+    trusted: queueCounts.trusted,
+    social: queueCounts.social,
+    news: queueCounts.news,
+    gameplay: queueCounts.gameplay,
+    other: queueCounts.other,
+    posted: queueCounts.posted,
   };
 
-  async function copyText(text: string) {
-    await navigator.clipboard.writeText(text);
-  }
+  useEffect(() => {
+    if (!roomState || !currentMember) return;
 
-  async function copyRoomLink() {
-    await copyText(window.location.origin);
-    setToast("Room link copied.");
-  }
+    const searchParams = new URLSearchParams(window.location.search);
+    let rawTarget = searchParams.get("task");
+    if (!rawTarget) {
+      try { rawTarget = window.sessionStorage.getItem(pendingTaskLinkStorageKey); } catch { rawTarget = null; }
+    }
+    if (!rawTarget || handledTaskLinkRef.current === rawTarget) return;
 
-  async function addClip(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!clipForm.url.trim()) {
-      setToast("Paste a Twitch clip URL first.");
+    const target = parseTaskLinkTarget(rawTarget);
+    if (!target) {
+      handledTaskLinkRef.current = rawTarget;
+      try { window.sessionStorage.removeItem(pendingTaskLinkStorageKey); } catch { /* optional */ }
       return;
     }
 
+    const matchedTask = queueTasks.find((task) =>
+      target.kind === task.kind && (task.kind === "clip" ? task.clip.id : task.collection.id) === target.id,
+    );
+    if (!matchedTask) return;
+
+    handledTaskLinkRef.current = rawTarget;
+    try { window.sessionStorage.removeItem(pendingTaskLinkStorageKey); } catch { /* optional */ }
+
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      setQuery("");
+      setViewOptions({ ...defaultQueueViewOptions });
+      setCategoryFilter(taskMatchesFilter(matchedTask, "trusted", currentMember.username) ? "trusted" : "all");
+      secondFrame = window.requestAnimationFrame(() => {
+        const element = document.getElementById(taskDomId(target.kind, target.id));
+        if (!element) return;
+        element.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+        element.classList.remove("task-link-highlight");
+        void element.getBoundingClientRect();
+        element.classList.add("task-link-highlight");
+        window.setTimeout(() => element.classList.remove("task-link-highlight"), 2400);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [currentMember, queueTasks, roomState]);
+
+
+  async function addClip(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!clipForm.url.trim()) {
+      setToast("Paste a Twitch or Kick clip URL first.");
+      return;
+    }
+
+    const deletedMatch = roomState?.trash?.clips.find((clip) =>
+      supportedClipUrlsMatch(clip.url, clipForm.url.trim()),
+    );
+    if (deletedMatch) {
+      setRestoreCandidate(deletedMatch);
+      setToast("");
+      return;
+    }
+
+    setRestoreCandidate(null);
     setBusyAction("add-clip");
     try {
-      const nextState = await apiRequest<RoomState>("/api/cliproom/clips", {
+      const nextState = await apiTaskRequest("/api/cliproom/clips", {
         method: "POST",
         body: JSON.stringify(clipForm),
       });
       applyRoomState(nextState);
       setClipForm(emptyClipForm);
+      setIntakeMode(null);
       setToast("Clip added to the review queue.");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not add that clip.");
@@ -348,36 +507,17 @@ export default function Home() {
 
     setBusyAction("add-member");
     try {
-      const response = await apiRequest<InviteResponse>("/api/cliproom/members", {
+      const nextState = await apiRequest<RoomState>("/api/cliproom/members", {
         method: "POST",
-        body: JSON.stringify({ email: memberEmail, role: memberRole }),
+        body: JSON.stringify({ username: memberUsername, role: memberRole }),
       });
-      applyRoomState(response.state);
-      await copyText(response.inviteUrl);
-      setToast(`Invite link copied for ${memberEmail.trim().toLowerCase()}.`);
-      setMemberEmail("");
+      applyRoomState(nextState);
+      const addedUsername = memberUsername.trim().replace(/^@+/, "").toLowerCase();
+      setToast(`@${addedUsername} can now sign in with Twitch.`);
+      setMemberUsername("");
       setMemberRole("Clipper");
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "Could not add that person.");
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function regenerateMemberInvite(member: Member) {
-    if (!isAdmin) return;
-
-    setBusyAction(`invite-${member.id}`);
-    try {
-      const response = await apiRequest<InviteResponse>(
-        `/api/cliproom/members/${member.id}/invite`,
-        { method: "POST" },
-      );
-      applyRoomState(response.state);
-      await copyText(response.inviteUrl);
-      setToast(`Fresh invite link copied for ${member.email}.`);
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "Could not create invite link.");
+      setToast(error instanceof Error ? error.message : "Could not add that Twitch user.");
     } finally {
       setBusyAction(null);
     }
@@ -393,7 +533,7 @@ export default function Home() {
         { method: "DELETE" },
       );
       applyRoomState(nextState);
-      setToast(`${member.email} removed from ClipRoom.`);
+      setToast(`@${member.username} removed from ClipRoom.`);
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not remove access.");
     } finally {
@@ -405,14 +545,16 @@ export default function Home() {
     if (!isAdmin) return;
 
     setBusyAction(`priority-${clip.id}`);
+    const rollback = updateTaskOptimistically(clip, { priority: !clip.priority, status: clip.status === "New" ? "Prioritised" : clip.status === "Prioritised" ? "New" : clip.status });
     try {
-      const nextState = await apiRequest<RoomState>(`/api/cliproom/clips/${clip.id}`, {
+      const nextState = await apiTaskRequest(`/api/cliproom/clips/${clip.id}`, {
         method: "PATCH",
         body: JSON.stringify({ action: "togglePriority" }),
       });
       applyRoomState(nextState);
       setToast(clip.priority ? "Clip removed from priority." : "Clip prioritised.");
     } catch (error) {
+      rollback();
       setToast(error instanceof Error ? error.message : "Could not update priority.");
     } finally {
       setBusyAction(null);
@@ -422,7 +564,7 @@ export default function Home() {
   async function advanceClip(clip: Clip) {
     setBusyAction(`advance-${clip.id}`);
     try {
-      const nextState = await apiRequest<RoomState>(`/api/cliproom/clips/${clip.id}`, {
+      const nextState = await apiTaskRequest(`/api/cliproom/clips/${clip.id}`, {
         method: "PATCH",
         body: JSON.stringify({ action: "advance" }),
       });
@@ -435,18 +577,299 @@ export default function Home() {
     }
   }
 
-  async function removeClip(clip: Clip) {
-    if (!isAdmin) return;
+  async function resetClipProgress(clip: Clip) {
+    setBusyAction(`reset-clip-${clip.id}`);
+    try {
+      const nextState = await apiTaskRequest(`/api/cliproom/clips/${clip.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ action: "resetProgress" }),
+      });
+      applyRoomState(nextState);
+      setToast(`${clip.title} reset to the start of the workflow.`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not reset the clip's progress.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
 
+  async function restoreTask(kind: "clip" | "collection", id: string, title: string) {
+    setBusyAction(`restore-${id}`);
+    try {
+      applyRoomState(await apiTaskRequest(`/api/cliproom/${kind === "clip" ? "clips" : "collections"}/${id}`, { method: "PATCH", body: JSON.stringify({ action: "restore" }) }));
+      setLastDeleted(null);
+      setRestoreCandidate(null);
+      setToast(`${title} restored to the queue.`);
+      return true;
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not restore that task.");
+      return false;
+    } finally { setBusyAction(null); }
+  }
+
+  async function restoreDeletedCandidate() {
+    if (!restoreCandidate) return;
+    const restored = await restoreTask("clip", restoreCandidate.id, restoreCandidate.title);
+    if (restored) {
+      setClipForm(emptyClipForm);
+      setIntakeMode(null);
+    }
+  }
+
+  async function permanentlyDeleteTask(kind: "clip" | "collection", id: string, title: string) {
+    if (!isAdmin) {
+      setToast("Only admins can permanently delete tasks.");
+      return false;
+    }
+
+    setBusyAction(`permanent-delete-${id}`);
+    try {
+      applyRoomState(await apiTaskRequest(`/api/cliproom/${kind === "clip" ? "clips" : "collections"}/${id}`, { method: "PATCH", body: JSON.stringify({ action: "permanent-delete" }) }));
+      setLastDeleted(null);
+      setRestoreCandidate(null);
+      setToast(`${title} permanently deleted.`);
+      return true;
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not permanently delete that task.");
+      return false;
+    } finally { setBusyAction(null); }
+  }
+
+  async function removeClip(clip: Clip) {
     setBusyAction(`delete-${clip.id}`);
     try {
-      const nextState = await apiRequest<RoomState>(`/api/cliproom/clips/${clip.id}`, {
+      const nextState = await apiTaskRequest(`/api/cliproom/clips/${clip.id}`, {
         method: "DELETE",
       });
       applyRoomState(nextState);
-      setToast(`${clip.title} removed.`);
+      setToast(`${clip.title} moved to Recently deleted.`);
+      setLastDeleted({kind: "clip", id: clip.id, title: clip.title});
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not remove the clip.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function updateClipDetails(
+    clip: Clip,
+    input: { title: string; notes: string; category: Category },
+  ) {
+    setBusyAction(`update-clip-${clip.id}`);
+    const rollback = updateTaskOptimistically(clip, input);
+    try {
+      const nextState = await apiTaskRequest(`/api/cliproom/clips/${clip.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ action: "updateDetails", ...input }),
+      });
+      applyRoomState(nextState);
+      setToast("Clip details updated.");
+      return true;
+    } catch (error) {
+      rollback();
+      setToast(error instanceof Error ? error.message : "Could not update the clip.");
+      return false;
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function createCollection(input: CollectionCreateInput) {
+    if (!input.urls.length) {
+      setToast("Add at least one Twitch or Kick clip to the Collection.");
+      return;
+    }
+
+    setBusyAction("create-collection");
+    try {
+      const nextState = await apiTaskRequest("/api/cliproom/collections", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      applyRoomState(nextState);
+      setIntakeMode(null);
+      setToast("Collection added to the review queue.");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not create that Collection.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function toggleCollectionPriority(collection: Collection) {
+    if (!isAdmin) return;
+
+    setBusyAction(`collection-priority-${collection.id}`);
+    const rollback = updateTaskOptimistically(collection, { priority: !collection.priority, status: collection.status === "New" ? "Prioritised" : collection.status === "Prioritised" ? "New" : collection.status });
+    try {
+      const nextState = await apiTaskRequest(
+        `/api/cliproom/collections/${collection.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ action: "togglePriority" }),
+        },
+      );
+      applyRoomState(nextState);
+      setToast(
+        collection.priority
+          ? "Collection removed from priority."
+          : "Collection prioritised.",
+      );
+    } catch (error) {
+      rollback();
+      setToast(error instanceof Error ? error.message : "Could not update Collection priority.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function advanceCollection(collection: Collection) {
+    setBusyAction(`collection-advance-${collection.id}`);
+    try {
+      const nextState = await apiTaskRequest(
+        `/api/cliproom/collections/${collection.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ action: "advance" }),
+        },
+      );
+      applyRoomState(nextState);
+      setToast(`${collection.title} moved forward.`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not update the Collection.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function resetCollectionProgress(collection: Collection) {
+    setBusyAction(`reset-collection-${collection.id}`);
+    try {
+      const nextState = await apiTaskRequest(
+        `/api/cliproom/collections/${collection.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ action: "resetProgress" }),
+        },
+      );
+      applyRoomState(nextState);
+      setToast(`${collection.title} reset to the start of the workflow.`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not reset the Collection's progress.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  function toggleRightPanels() {
+    setRightPanelsCollapsed((collapsed) => {
+      const next = !collapsed;
+      try {
+        window.localStorage.setItem(rightPanelsStorageKey, String(next));
+      } catch {
+        // Keep the in-memory preference when storage is unavailable.
+      }
+      return next;
+    });
+  }
+
+  async function dissolveCollection(collection: Collection) {
+    setBusyAction(`delete-collection-${collection.id}`);
+    try {
+      const nextState = await apiTaskRequest(
+        `/api/cliproom/collections/${collection.id}`,
+        { method: "DELETE" },
+      );
+      applyRoomState(nextState);
+      setToast(`${collection.title} moved to Recently deleted.`);
+      setLastDeleted({kind: "collection", id: collection.id, title: collection.title});
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not delete the Collection.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function addClipToCollection(collection: Collection, url: string) {
+    setBusyAction(`add-collection-clip-${collection.id}`);
+    try {
+      const nextState = await apiTaskRequest(
+        `/api/cliproom/collections/${collection.id}/clips`,
+        {
+          method: "POST",
+          body: JSON.stringify({ url }),
+        },
+      );
+      applyRoomState(nextState);
+      setToast("Clip added to the Collection.");
+      return true;
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not add that clip to the Collection.");
+      return false;
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function removeClipFromCollection(collection: Collection, clip: Clip) {
+    setBusyAction(`remove-collection-clip-${collection.id}`);
+    try {
+      const nextState = await apiTaskRequest(
+        `/api/cliproom/collections/${collection.id}/clips/${clip.id}`,
+        { method: "DELETE" },
+      );
+      applyRoomState(nextState);
+      setToast(`${clip.title} is standalone again.`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not remove that clip from the Collection.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function reorderCollectionClip(
+    collection: Collection,
+    clip: Clip,
+    direction: "left" | "right",
+  ) {
+    setBusyAction(`reorder-${collection.id}`);
+    try {
+      const nextState = await apiTaskRequest(
+        `/api/cliproom/collections/${collection.id}/clips/${clip.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ direction }),
+        },
+      );
+      applyRoomState(nextState);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not reorder that clip.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function updateCollectionDetails(
+    collection: Collection,
+    input: { title: string; notes: string; category: Category },
+  ) {
+    setBusyAction(`update-collection-${collection.id}`);
+    const rollback = updateTaskOptimistically(collection, input);
+    try {
+      const nextState = await apiTaskRequest(
+        `/api/cliproom/collections/${collection.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ action: "update", ...input }),
+        },
+      );
+      applyRoomState(nextState);
+      setToast("Collection details updated.");
+      return true;
+    } catch (error) {
+      rollback();
+      setToast(error instanceof Error ? error.message : "Could not update the Collection.");
+      return false;
     } finally {
       setBusyAction(null);
     }
@@ -475,7 +898,7 @@ export default function Home() {
   }
 
   async function syncTwitch() {
-    if (!isAdmin) return;
+    if (!roomState?.twitchSyncAvailable) return;
 
     setBusyAction("sync");
     try {
@@ -508,71 +931,98 @@ export default function Home() {
   }
 
   if (!roomState || !currentMember) {
+    const configured = authStatus?.configured ?? false;
+    const needsSetup = authStatus?.needsSetup ?? false;
+
     return (
-      <main className="min-h-screen bg-[#0e0e10] text-white">
-        <div className="grid min-h-screen place-items-center bg-[radial-gradient(circle_at_top,rgba(145,70,255,0.3),transparent_420px)] px-4 py-10">
-          <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#18181b] p-5 shadow-2xl shadow-black/40">
-            <div className="mb-5 flex items-center gap-3">
-              <div className="grid h-12 w-12 place-items-center rounded-lg bg-[#9146ff] shadow-[0_0_34px_rgba(145,70,255,0.38)]">
-                <Clapperboard aria-hidden="true" size={25} />
+      <main className="min-h-screen overflow-hidden bg-[#0b0b0d] text-white">
+        <div className="relative grid min-h-screen place-items-center px-4 py-10 sm:px-6">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_18%,rgba(145,70,255,0.13),transparent_29rem),radial-gradient(circle_at_12%_90%,rgba(145,70,255,0.055),transparent_24rem)]"
+          />
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute left-1/2 top-[18%] h-36 w-36 -translate-x-1/2 rounded-full bg-[#9146ff]/10 blur-3xl"
+          />
+
+          <section className="relative w-full max-w-[370px]">
+            <div className="mb-7 text-center">
+              <div className="mx-auto grid h-12 w-12 place-items-center rounded-[13px] bg-[#9146ff] shadow-[0_14px_42px_rgba(145,70,255,0.27)] ring-1 ring-white/10">
+                <Clapperboard aria-hidden="true" size={24} strokeWidth={2.15} />
               </div>
-              <div>
-                <p className="text-xl font-black leading-6">ClipRoom</p>
-                <p className="text-sm text-white/48">Private creator queue</p>
+              <p className="mt-4 text-[22px] font-black">ClipRoom</p>
+              <p className="mt-1 text-[13px] font-medium text-white/38">Private creator queue</p>
+            </div>
+
+            <div className="rounded-[18px] border border-white/[0.075] bg-[#151518]/92 p-5 shadow-[0_26px_90px_rgba(0,0,0,0.34)] backdrop-blur-xl sm:p-6">
+              <div className="text-center">
+                <h1 className="text-[19px] font-extrabold">Sign in to ClipRoom</h1>
+                <p className="mt-1.5 text-[13px] leading-5 text-white/42">
+                  Private access for your creator team.
+                </p>
+              </div>
+
+              <form autoComplete="off" className="mt-5 space-y-3.5" onSubmit={handleTwitchAuth}>
+                {needsSetup ? (
+                  <div className="rounded-[12px] border border-white/[0.075] bg-white/[0.025] p-3.5">
+                    <div>
+                      <label htmlFor="setup-code" className="mb-1.5 inline-block text-[11px] font-bold uppercase tracking-[0.08em] text-white/38">
+                        First admin setup
+                      </label>
+                      <input autoComplete="off"
+                        id="setup-code"
+                        className="h-11 w-full rounded-[9px] border border-white/[0.09] bg-[#0f0f12] px-3 text-[15px] text-white outline-none placeholder:text-white/25 transition focus:border-[#9146ff]/70 focus:bg-[#111114]"
+                        onChange={(event) => setSetupCode(event.target.value)}
+                        placeholder="Enter setup code"
+                        type="password"
+                        value={setupCode}
+                      />
+                      <p className="mt-2 text-[11px] leading-[17px] text-white/32">
+                        One-time setup to bind the first admin to their verified Twitch account.
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
+
+                <button
+                  className="group inline-flex h-12 w-full items-center justify-center gap-2.5 rounded-[10px] bg-[#9146ff] text-[14px] font-extrabold text-white shadow-[0_10px_30px_rgba(145,70,255,0.18)] hover:bg-[#9d58ff] hover:shadow-[0_12px_34px_rgba(145,70,255,0.25)] active:translate-y-px disabled:cursor-not-allowed disabled:opacity-55"
+                  disabled={authBusy || !configured || (needsSetup && !setupCode.trim())}
+                  type="submit"
+                >
+                  <svg aria-hidden="true" className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M4.3 2 2.9 5.7v13.7h4.8V22h2.8l2.6-2.6h3.9L21.1 15V2H4.3Zm14.5 11.9-2.4 2.4h-4.1l-2.6 2.6v-2.6H6.3V4.4h12.5v9.5Zm-3.1-7.2h-2.3v6.1h2.3V6.7Zm-4.2 0H9.2v6.1h2.3V6.7Z" />
+                  </svg>
+                  {authBusy ? "Opening Twitch…" : "Continue with Twitch account"}
+                </button>
+              </form>
+
+              {!configured ? (
+                <div className="mt-3 rounded-[9px] border border-[#ffcc66]/20 bg-[#ffcc66]/[0.055] px-3 py-2.5 text-center text-[12px] leading-5 text-[#ffe4ab]">
+                  Twitch login is not configured on this Worker yet.
+                </div>
+              ) : null}
+
+              {toast ? (
+                <p className="mt-3 text-center text-[12px] leading-5 text-white/46" role="status">
+                  {toast}
+                </p>
+              ) : null}
+
+              <div className="mt-5 border-t border-white/[0.055] pt-4">
+                <div className="flex items-start justify-center gap-2 text-white/34">
+                  <ShieldCheck aria-hidden="true" className="mt-0.5 shrink-0" size={14} />
+                  <p className="max-w-[285px] text-center text-[11px] leading-[17px]">
+                    Your Twitch password is never shared with or stored by ClipRoom.
+                  </p>
+                </div>
               </div>
             </div>
 
-            <div className="mb-4">
-              <h1 className="text-2xl font-black leading-tight">Enter ClipRoom</h1>
-              <p className="mt-2 text-sm leading-5 text-white/54">
-                Sign in with your invite email and access code.
-              </p>
+            <div className="mt-4 flex items-center justify-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.11em] text-white/22">
+              <span className="h-1 w-1 rounded-full bg-[#9146ff]/65" />
+              Invite-only creator workspace
             </div>
-
-            <form className="space-y-3" onSubmit={handleAuth}>
-              <label className="block">
-                <span className="mb-1.5 block text-xs font-semibold text-white/48">
-                  Email
-                </span>
-                <input
-                  className="h-12 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-base text-white outline-none placeholder:text-white/34 focus:border-[#9146ff]"
-                  onChange={(event) =>
-                    setAuthForm((current) => ({ ...current, email: event.target.value }))
-                  }
-                  placeholder="you@email.com"
-                  type="email"
-                  value={authForm.email}
-                />
-              </label>
-              <label className="block">
-                <span className="mb-1.5 block text-xs font-semibold text-white/48">
-                  Access code
-                </span>
-                <input
-                  className="h-12 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-base text-white outline-none placeholder:text-white/34 focus:border-[#9146ff]"
-                  onChange={(event) =>
-                    setAuthForm((current) => ({ ...current, code: event.target.value }))
-                  }
-                  placeholder="Paste code"
-                  type="password"
-                  value={authForm.code}
-                />
-              </label>
-              <button
-                className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-[#9146ff] text-sm font-black text-white hover:bg-[#7c3aed] disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={authBusy}
-                type="submit"
-              >
-                <KeyRound aria-hidden="true" size={18} />
-                {authBusy ? "Checking access" : "Enter ClipRoom"}
-              </button>
-            </form>
-
-            {toast ? (
-              <div className="mt-4 rounded-lg border border-[#ffcc66]/30 bg-[#ffcc66]/10 p-3 text-sm leading-5 text-[#ffe4ab]">
-                {toast}
-              </div>
-            ) : null}
           </section>
         </div>
       </main>
@@ -580,46 +1030,40 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-[#0e0e10] text-white">
-      <div className="min-h-screen bg-[linear-gradient(180deg,rgba(145,70,255,0.24),rgba(14,14,16,0)_360px)]">
-        <header className="sticky top-0 z-30 border-b border-white/10 bg-[#0e0e10]/92 backdrop-blur-xl">
-          <div className="mx-auto flex h-16 max-w-[1500px] items-center gap-4 px-4 sm:px-6 lg:px-8">
+    <ClipPreviewProvider>
+    <main className="min-h-screen bg-[#0b0b0d] text-white">
+      <div className="min-h-screen bg-[radial-gradient(circle_at_22%_-12%,rgba(145,70,255,0.16),transparent_34rem)]">
+        <header className="sticky top-0 z-30 border-b border-white/[0.07] bg-[#0b0b0d]/88 backdrop-blur-2xl">
+          <div className="app-header flex h-[68px] items-center gap-4 px-4 sm:px-6 lg:px-7">
             <div className="flex min-w-0 items-center gap-3">
-              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-[#9146ff] shadow-[0_0_30px_rgba(145,70,255,0.35)]">
-                <Clapperboard aria-hidden="true" size={22} />
+              <div className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] bg-[#9146ff] shadow-[0_8px_24px_rgba(145,70,255,0.28)]">
+                <Clapperboard aria-hidden="true" size={20} strokeWidth={2.2} />
               </div>
               <div className="min-w-0">
-                <p className="text-base font-semibold leading-5">ClipRoom</p>
-                <p className="truncate text-xs text-white/48">
+                <p className="text-[15px] font-extrabold leading-5">ClipRoom</p>
+                <p className="truncate text-[11px] font-medium text-white/38">
                   Private creator queue
                 </p>
               </div>
             </div>
 
             <div className="hidden min-w-0 flex-1 items-center justify-center md:flex">
-              <label className="flex h-10 w-full max-w-xl items-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 text-sm text-white/54 focus-within:border-[#9146ff]/80">
-                <Search aria-hidden="true" size={17} />
-                <input
-                  aria-label="Search clips"
-                  className="h-full min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/38"
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search clips, notes, assignees..."
-                  value={query}
-                />
-              </label>
+              <QueueSearchControls query={query} onQueryChange={setQuery} options={viewOptions} onOptionsChange={setViewOptions} />
             </div>
 
             <div className="ml-auto flex shrink-0 items-center gap-2">
+              {isAdmin ? (
+                <Link
+                  aria-label="Audit logs"
+                  className="grid h-10 w-10 place-items-center rounded-[10px] border border-white/[0.08] bg-white/[0.035] text-white/46 hover:border-[#9146ff]/30 hover:bg-[#9146ff]/10 hover:text-[#d8c6ff]"
+                  href="/audit"
+                  title="Audit logs"
+                >
+                  <ClipboardList aria-hidden="true" size={17} />
+                </Link>
+              ) : null}
               <button
-                className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 text-sm font-bold text-white/74 hover:border-white/24 hover:text-white"
-                onClick={copyRoomLink}
-                type="button"
-              >
-                <Copy aria-hidden="true" size={16} />
-                <span className="hidden sm:inline">Copy link</span>
-              </button>
-              <button
-                className="grid h-10 w-10 place-items-center rounded-lg border border-white/10 bg-white/[0.06] text-white/64 hover:border-white/24 hover:text-white"
+                className="grid h-10 w-10 place-items-center rounded-[10px] border border-white/[0.08] bg-white/[0.035] text-white/46 hover:border-white/15 hover:bg-white/[0.065] hover:text-white"
                 disabled={busyAction === "signout"}
                 onClick={signOut}
                 title="Sign out"
@@ -631,206 +1075,222 @@ export default function Home() {
           </div>
         </header>
 
-        <div className="mx-auto grid max-w-[1500px] grid-cols-1 gap-5 px-4 py-5 sm:px-6 lg:grid-cols-[238px_minmax(0,1fr)_340px] lg:px-8">
-          <aside className="hidden lg:block">
-            <section className="rounded-lg border border-white/10 bg-white/[0.055] p-4">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-semibold">Room</p>
-                  <p className="text-xs text-white/42">
-                    {currentMember.role} access
-                  </p>
+        <div className="app-shell px-4 py-6 sm:px-6 lg:px-5" data-panels-collapsed={rightPanelsCollapsed ? "true" : "false"}>
+          <aside className="hidden xl:block">
+            <div className="sticky top-[92px] border-r border-white/[0.07] pr-5">
+              <div className="mb-7">
+                <p className="mb-2 text-[10px] font-bold uppercase text-white/24">Signed in as</p>
+                <div className="flex items-center gap-3">
+                  {currentMember.avatarUrl ? (
+                    <img
+                      alt=""
+                      className="h-9 w-9 shrink-0 rounded-[10px] border border-[#9146ff]/25 object-cover"
+                      src={currentMember.avatarUrl}
+                    />
+                  ) : (
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border border-[#9146ff]/25 bg-[#9146ff]/10 text-[#c7a8ff]">
+                      <UserRound aria-hidden="true" size={17} />
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold">{currentMember.displayName}</p>
+                    <p className="mt-0.5 truncate text-xs text-white/36">@{currentMember.username} · {currentMember.role}</p>
+                  </div>
                 </div>
-                <span className="grid h-7 w-7 place-items-center rounded-lg bg-[#2dd4bf]/14 text-[#8ff7eb]">
-                  <ShieldCheck aria-hidden="true" size={15} />
-                </span>
               </div>
-              <div className="space-y-1.5">
+
+              <p className="mb-2 px-2 text-[10px] font-bold uppercase text-white/24">Room stats</p>
+              <div className="space-y-1">
                 {[
-                  ["Library", counts.all],
-                  ["Trusted", counts.trusted],
-                  ["Priority", priorityClips.length],
-                  ["Access", roomState.memberCount],
-                  ["Posted", counts.posted],
-                ].map(([label, count]) => (
+                  ["Clips", counts.all, false] as const,
+                  ["Trusted", counts.trusted, false] as const,
+                  ["Priority", priorityTasks.length, false] as const,
+                  ["Posted", counts.posted, false] as const,
+                  ...(isAdmin ? [["Members", roomState.memberCount, false] as const] : []),
+                  ["Online", roomState.onlineMemberCount, true] as const,
+                ].map(([label, count, online]) => (
                   <div
                     key={label}
-                    className="flex items-center justify-between rounded-lg px-3 py-2 text-sm text-white/58 first:bg-white/[0.07] first:text-white/78"
+                    className="flex items-center justify-between rounded-[9px] px-2.5 py-2 text-[13px] text-white/40"
                   >
-                    <span>{label}</span>
-                    <span>{count}</span>
+                    <span className="flex items-center gap-2">
+                      {online ? <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.35)]" /> : null}
+                      {label}
+                    </span>
+                    <span className="tabular-nums text-white/32">{count}</span>
                   </div>
                 ))}
               </div>
-            </section>
+
+              <div className="mt-8 border-t border-white/[0.07] pt-5">
+                <p className="text-[11px] leading-5 text-white/30">
+                  Private workspace for your creator team.
+                </p>
+              </div>
+            </div>
           </aside>
 
-          <section className="min-w-0">
-            <div className="mb-4 rounded-lg border border-white/10 bg-[#18181b] p-4">
-              <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                <div className="min-w-0">
-                  <span className="inline-flex h-7 items-center gap-2 rounded-lg border border-[#2dd4bf]/35 bg-[#2dd4bf]/12 px-3 text-xs font-semibold text-[#adfff6]">
-                    <ShieldCheck aria-hidden="true" size={15} />
-                    Invite-only room
+          <section className="queue-section">
+            <div className="queue-heading mb-5 flex flex-col gap-5 border-b border-white/[0.07] pb-5">
+              <div className="min-w-0">
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <span className="inline-flex h-7 items-center gap-1.5 rounded-full border border-[#9146ff]/25 bg-[#9146ff]/10 px-2.5 text-[11px] font-semibold text-[#cdb5ff]">
+                    <ShieldCheck aria-hidden="true" size={13} />
+                    Private room
                   </span>
-                  <h1 className="mt-3 text-2xl font-black leading-tight sm:text-3xl">
-                    Review queue
-                  </h1>
-                  <p className="mt-1 text-sm text-white/54">
-                    {activeClips} active, {claimedClips} claimed,{" "}
-                    {priorityClips.length} priority, {counts.trusted} trusted.
-                  </p>
+                  <span className="text-xs text-white/28">twitch.tv/{roomState.sourceChannel}</span>
                 </div>
-                <div className="grid grid-cols-3 gap-2 sm:max-w-md xl:w-[360px]">
-                  {[
-                    ["Clips", clips.length],
-                    ["Priority", priorityClips.length],
-                    ["Posted", counts.posted],
-                  ].map(([label, value]) => (
-                    <div
-                      key={label}
-                      className="rounded-lg border border-white/10 bg-white/[0.045] px-3 py-2"
-                    >
-                      <p className="text-xs text-white/42">{label}</p>
-                      <p className="mt-1 text-lg font-black">{value}</p>
-                    </div>
-                  ))}
+                <h1 className="text-[30px] font-black leading-none sm:text-[36px]">
+                  Review queue
+                </h1>
+                <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-white/38">
+                  <span><strong className="font-semibold text-white/72">{queueCounts.active}</strong> active</span>
+                  <span><strong className="font-semibold text-white/72">{queueCounts.claimed}</strong> claimed</span>
+                  <span><strong className="font-semibold text-white/72">{queueCounts.priority}</strong> priority</span>
+                  <span><strong className="font-semibold text-white/72">{counts.posted}</strong> posted</span>
                 </div>
               </div>
-            </div>
 
-            <div className="mb-4 rounded-lg border border-white/10 bg-[#18181b] p-4">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-bold">Clip intake</p>
-                  <p className="text-xs text-white/42">
-                    Paste a Twitch clip and it appears in the manual queue.
-                  </p>
-                </div>
-                <span className="hidden rounded-lg border border-white/10 bg-white/[0.055] px-3 py-1.5 text-xs text-white/50 sm:inline">
-                  Source: twitch.tv/{roomState.sourceChannel}
-                </span>
-              </div>
-              <form
-                className="grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)_220px]"
-                onSubmit={addClip}
-              >
-                <label className="min-w-0">
-                  <span className="mb-1.5 block text-xs font-semibold text-white/48">
-                    Clip URL
-                  </span>
-                  <input
-                    aria-label="Clip URL"
-                    className="h-11 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-sm text-white outline-none placeholder:text-white/32 focus:border-[#9146ff]"
-                    onChange={(event) =>
-                      setClipForm((current) => ({
-                        ...current,
-                        url: event.target.value,
-                      }))
-                    }
-                    placeholder="https://clips.twitch.tv/..."
-                    value={clipForm.url}
-                  />
-                </label>
-                <label className="min-w-0">
-                  <span className="mb-1.5 block text-xs font-semibold text-white/48">
-                    Title
-                  </span>
-                  <input
-                    aria-label="Clip title"
-                    className="h-11 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-sm text-white outline-none placeholder:text-white/32 focus:border-[#9146ff]"
-                    onChange={(event) =>
-                      setClipForm((current) => ({
-                        ...current,
-                        title: event.target.value,
-                      }))
-                    }
-                    placeholder="What happened?"
-                    value={clipForm.title}
-                  />
-                </label>
-                <div>
-                  <span className="mb-1.5 block text-xs font-semibold text-white/48">
-                    Category
-                  </span>
-                  <div
-                    aria-label="Clip category"
-                    className="grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-white/[0.06] p-1"
-                    role="radiogroup"
-                  >
-                    {categories.map((category) => (
-                      <button
-                        key={category.id}
-                        aria-checked={clipForm.category === category.id}
-                        className={`h-9 rounded-md px-2 text-xs font-bold ${
-                          clipForm.category === category.id
-                            ? "bg-[#9146ff] text-white"
-                            : "text-white/52 hover:bg-white/[0.07] hover:text-white"
-                        }`}
-                        onClick={() =>
-                          setClipForm((current) => ({
-                            ...current,
-                            category: category.id,
-                          }))
-                        }
-                        role="radio"
-                        type="button"
-                      >
-                        {category.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <label className="min-w-0 xl:col-span-2">
-                  <span className="mb-1.5 block text-xs font-semibold text-white/48">
-                    Notes
-                  </span>
-                  <input
-                    aria-label="Clip notes"
-                    className="h-11 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-sm text-white outline-none placeholder:text-white/32 focus:border-[#9146ff]"
-                    onChange={(event) =>
-                      setClipForm((current) => ({
-                        ...current,
-                        notes: event.target.value,
-                      }))
-                    }
-                    placeholder="Hook, caption idea, context, edit direction..."
-                    value={clipForm.notes}
-                  />
-                </label>
+              <div className="flex flex-wrap items-center gap-2">
                 <button
-                  className="mt-auto inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[#9146ff] px-4 text-sm font-bold text-white hover:bg-[#7c3aed] disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={busyAction === "add-clip"}
-                  type="submit"
+                  className={`inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-[10px] border px-4 text-sm font-bold transition ${
+                    intakeMode === "clip"
+                      ? "border-white/15 bg-white/[0.09] text-white"
+                      : "border-white/[0.08] bg-white/[0.035] text-white/62 hover:border-white/14 hover:bg-white/[0.06] hover:text-white"
+                  }`}
+                  onClick={() => setIntakeMode((mode) => (mode === "clip" ? null : "clip"))}
+                  type="button"
                 >
                   <Plus aria-hidden="true" size={17} />
-                  {busyAction === "add-clip" ? "Adding" : "Add clip"}
+                  {intakeMode === "clip" ? "Close form" : "Add clip"}
                 </button>
-              </form>
+                <button
+                  className={`inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-[10px] px-4 text-sm font-bold text-white shadow-[0_10px_28px_rgba(145,70,255,0.18)] transition ${
+                    intakeMode === "collection" ? "bg-[#a05cff]" : "bg-[#9146ff] hover:bg-[#a05cff]"
+                  }`}
+                  onClick={() =>
+                    setIntakeMode((mode) => (mode === "collection" ? null : "collection"))
+                  }
+                  type="button"
+                >
+                  <Plus aria-hidden="true" size={17} />
+                  {intakeMode === "collection" ? "Close collection" : "Create collection"}
+                </button>
+              </div>
             </div>
 
-            <div className="mb-4 rounded-lg border border-white/10 bg-[#18181b] p-3 sm:p-4">
-              <div className="flex flex-col gap-3 md:hidden">
-                <label className="flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 text-sm text-white/54">
-                  <Search aria-hidden="true" size={17} />
-                  <input
-                    aria-label="Search clips"
-                    className="h-full min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/38"
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder="Search clips..."
-                    value={query}
-                  />
-                </label>
+            {intakeMode === "clip" ? (
+              <div className="mb-5 rounded-[14px] border border-[#9146ff]/20 bg-[linear-gradient(145deg,rgba(145,70,255,0.08),rgba(255,255,255,0.025))] p-4 sm:p-5">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold">Add a clip</p>
+                    <p className="mt-1 text-xs text-white/36">Paste a Twitch or Kick clip URL, add context, then send it to the queue.</p>
+                  </div>
+                </div>
+                <form autoComplete="off"
+                  className="clip-intake-fields"
+                  onSubmit={addClip}
+                >
+                  <div className="min-w-0">
+                    <label htmlFor="new-clip-url" className="mb-1.5 inline-block text-[11px] font-semibold text-white/38">Clip URL</label>
+                    <input autoComplete="off"
+                      id="new-clip-url"
+                      aria-label="Clip URL"
+                      className="h-11 w-full rounded-[10px] border border-white/[0.08] bg-black/20 px-3 text-sm text-white outline-none placeholder:text-white/22 focus:border-[#9146ff]/60 focus:bg-white/[0.045]"
+                      maxLength={maxClipUrlLength}
+                      onChange={(event) =>
+                        setClipForm((current) => ({ ...current, url: event.target.value }))
+                      }
+                      placeholder="Paste a Twitch or Kick clip URL"
+                      value={clipForm.url}
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <label htmlFor="new-clip-title" className="mb-1.5 inline-block text-[11px] font-semibold text-white/38">Title</label>
+                    <input autoComplete="off"
+                      id="new-clip-title"
+                      aria-label="Clip title"
+                      className="h-11 w-full rounded-[10px] border border-white/[0.08] bg-black/20 px-3 text-sm text-white outline-none placeholder:text-white/22 focus:border-[#9146ff]/60 focus:bg-white/[0.045]"
+                      maxLength={maxClipTitleLength}
+                      onChange={(event) =>
+                        setClipForm((current) => ({ ...current, title: event.target.value }))
+                      }
+                      placeholder="What happened?"
+                      value={clipForm.title}
+                    />
+                  </div>
+                  <div>
+                    <span className="mb-1.5 block text-[11px] font-semibold text-white/38">Category</span>
+                    <div
+                      aria-label="Clip category"
+                      className="grid grid-cols-2 gap-1 rounded-[10px] border border-white/[0.08] bg-black/20 p-1"
+                      role="radiogroup"
+                    >
+                      {categories.map((category) => (
+                        <button
+                          key={category.id}
+                          aria-checked={clipForm.category === category.id}
+                          className={`h-9 rounded-[7px] px-2 text-xs font-semibold ${
+                            clipForm.category === category.id
+                              ? "bg-white/[0.11] text-white"
+                              : "text-white/36 hover:bg-white/[0.05] hover:text-white/70"
+                          }`}
+                          onClick={() => setClipForm((current) => ({ ...current, category: category.id }))}
+                          onKeyDown={submitParentFormOnEnter}
+                          role="radio"
+                          type="button"
+                        >
+                          {category.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="clip-notes-field min-w-0">
+                    <label htmlFor="new-clip-notes" className="mb-1.5 inline-block text-[11px] font-semibold text-white/38">Notes</label>
+                    <input autoComplete="off"
+                      id="new-clip-notes"
+                      aria-label="Clip notes"
+                      className="h-11 w-full rounded-[10px] border border-white/[0.08] bg-black/20 px-3 text-sm text-white outline-none placeholder:text-white/22 focus:border-[#9146ff]/60 focus:bg-white/[0.045]"
+                      maxLength={maxClipNotesLength}
+                      onChange={(event) =>
+                        setClipForm((current) => ({ ...current, notes: event.target.value }))
+                      }
+                      placeholder="Hook, caption idea, context, edit direction..."
+                      value={clipForm.notes}
+                    />
+                  </div>
+                  <button
+                    className="mt-auto inline-flex h-11 items-center justify-center gap-2 rounded-[10px] bg-white px-4 text-sm font-bold text-[#111114] hover:bg-[#eee8f7] disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={busyAction === "add-clip"}
+                    type="submit"
+                  >
+                    <Plus aria-hidden="true" size={17} />
+                    {busyAction === "add-clip" ? "Adding" : "Add to queue"}
+                  </button>
+                </form>
+              </div>
+            ) : null}
+
+            {intakeMode === "collection" ? (
+              <CollectionIntake
+                busy={busyAction === "create-collection"}
+                onSubmit={createCollection}
+              />
+            ) : null}
+
+            <div className="mb-4">
+              <div className="mb-3 flex flex-col gap-3 md:hidden">
+                <QueueSearchControls query={query} onQueryChange={setQuery} options={viewOptions} onOptionsChange={setViewOptions} />
               </div>
               <div className="flex gap-2 overflow-x-auto">
                 {filters.map((filter) => (
                   <button
                     key={filter.id}
                     aria-pressed={categoryFilter === filter.id}
-                    className={`h-10 shrink-0 rounded-lg border px-4 text-sm font-semibold ${
+                    className={`h-9 shrink-0 rounded-full border px-3.5 text-[13px] font-semibold ${
                       categoryFilter === filter.id
-                        ? "border-[#9146ff] bg-[#9146ff] text-white"
-                        : "border-white/10 bg-white/[0.045] text-white/58 hover:border-white/22 hover:text-white"
+                        ? "border-[#9146ff]/45 bg-[#9146ff]/15 text-[#d8c6ff]"
+                        : "border-white/[0.07] bg-white/[0.025] text-white/38 hover:border-white/12 hover:bg-white/[0.045] hover:text-white/70"
                     }`}
                     onClick={() => setCategoryFilter(filter.id)}
                     type="button"
@@ -842,322 +1302,239 @@ export default function Home() {
                   </button>
                 ))}
               </div>
+              {query.trim() || hasViewOptions ? (
+                <p className="mt-3 text-xs text-white/48" role="status" aria-live="polite" aria-atomic="true">
+                  {filteredTasks.length} {filteredTasks.length === 1 ? "result" : "results"} in {filters.find((filter) => filter.id === categoryFilter)?.label}
+                </p>
+              ) : null}
             </div>
 
-            {toast ? (
-              <div className="mb-4 flex items-center gap-3 rounded-lg border border-[#9146ff]/35 bg-[#9146ff]/12 px-4 py-3 text-sm text-[#e8dcff]">
-                <Sparkles aria-hidden="true" size={17} />
-                <p>{toast}</p>
+            {restoreCandidate ? (
+              <div className="mb-4 flex flex-col gap-3 rounded-[12px] border border-[#9146ff]/30 bg-[linear-gradient(135deg,rgba(145,70,255,0.12),rgba(145,70,255,0.05))] px-4 py-3 sm:flex-row sm:items-center">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold text-white">This clip was recently deleted. Restore it to the queue?</p>
+                  <p className="mt-1 truncate text-xs text-white/45" title={restoreCandidate.title}>{restoreCandidate.title}</p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button className="h-9 rounded-[9px] border border-white/10 bg-white/[0.04] px-3 text-xs font-semibold text-white/60 hover:bg-white/[0.08] hover:text-white" onClick={() => setRestoreCandidate(null)} type="button">Cancel</button>
+                  <button className="h-9 rounded-[9px] bg-[#9146ff] px-3 text-xs font-bold text-white hover:bg-[#a970ff] disabled:opacity-50" disabled={busyAction === `restore-${restoreCandidate.id}`} onClick={() => void restoreDeletedCandidate()} type="button">Restore</button>
+                </div>
               </div>
             ) : null}
 
-            {filteredClips.length > 0 ? (
-              <div className="grid items-start gap-4 xl:grid-cols-2">
-                {filteredClips.map((clip) => {
-                  const embedUrl = getTwitchEmbedUrl(clip.url, embedHost);
-                  const clipSlug = getTwitchClipSlug(clip.url);
-                  const isTrustedSync = clip.intakeSource === "trusted_sync";
-                  const actionLabel = clipActionLabel(
-                    clip,
-                    currentMember.email,
-                    isAdmin,
-                  );
-                  const canAdvance =
-                    clip.status !== "Posted" &&
-                    (isAdmin ||
-                      clip.assignee === "Unclaimed" ||
-                      clip.assignee === currentMember.email);
+            {toast ? (
+              <div className="mb-4 flex items-center gap-2.5 rounded-[10px] border border-[#9146ff]/18 bg-[#9146ff]/8 px-3.5 py-2.5 text-[13px] text-[#d8c8f7]">
+                <Sparkles aria-hidden="true" size={17} />
+                <p className="min-w-0 flex-1">{toast}</p>
+                {lastDeleted && (roomState.trash?.clips.some((clip) => clip.id === lastDeleted.id) || roomState.trash?.collections.some((collection) => collection.id === lastDeleted.id)) ? <button className="shrink-0 rounded-md px-2 py-1 text-xs font-bold text-white hover:bg-[#9146ff]/25 disabled:opacity-50" disabled={busyAction === `restore-${lastDeleted.id}`} onClick={() => void restoreTask(lastDeleted.kind, lastDeleted.id, lastDeleted.title)} type="button">Undo delete</button> : null}
+              </div>
+            ) : null}
 
-                  return (
-                    <article
-                      key={clip.id}
-                      className="overflow-hidden rounded-lg border border-white/10 bg-[#18181b]"
-                    >
-                      <div className="border-b border-white/10 bg-black">
-                        {embedUrl ? (
-                          <iframe
-                            allow="autoplay; fullscreen; picture-in-picture"
-                            allowFullScreen
-                            className="aspect-video w-full"
-                            src={embedUrl}
-                            title={`${clip.title} Twitch clip`}
-                          />
-                        ) : (
-                          <div className="grid aspect-video place-items-center bg-[#101014] px-6 text-center">
-                            <div>
-                              <Clapperboard
-                                aria-hidden="true"
-                                className="mx-auto mb-3 text-[#9146ff]"
-                                size={28}
-                              />
-                              <p className="text-sm font-bold text-white">
-                                Preview unavailable
-                              </p>
-                              <p className="mt-1 text-xs text-white/44">
-                                Use a Twitch clip URL to play it in the room.
-                              </p>
-                            </div>
-                          </div>
-                        )}
-                      </div>
+            <RecentlyDeleted
+              trash={roomState.trash}
+              busyAction={busyAction}
+              onRestore={restoreTask}
+              onPermanentDelete={isAdmin ? permanentlyDeleteTask : undefined}
+              isAdmin={isAdmin}
+            />
 
-                      <div className="p-4">
-                        <div className="mb-3 flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="mb-2 flex flex-wrap items-center gap-2">
-                              {isTrustedSync ? (
-                                <span className="inline-flex min-w-0 items-center gap-1 rounded border border-[#2dd4bf]/40 bg-[#2dd4bf]/12 px-2.5 py-1 text-xs font-semibold text-[#b9fff7]">
-                                  <ShieldCheck
-                                    aria-hidden="true"
-                                    className="shrink-0"
-                                    size={12}
-                                  />
-                                  <span className="max-w-[180px] truncate">
-                                    {clip.twitchCreatorLogin
-                                      ? `Trusted: @${clip.twitchCreatorLogin}`
-                                      : "Trusted clipper"}
-                                  </span>
-                                </span>
-                              ) : null}
-                              <span
-                                className={`rounded border px-2.5 py-1 text-xs font-semibold ${statusStyles[clip.status]}`}
-                              >
-                                {clip.status}
-                              </span>
-                              <span className="rounded border border-white/10 bg-white/[0.055] px-2.5 py-1 text-xs text-white/56">
-                                {categoryLabel(clip.category)}
-                              </span>
-                            </div>
-                            <h2 className="line-clamp-2 text-lg font-bold leading-6">
-                              {clip.title}
-                            </h2>
-                            <p className="mt-2 line-clamp-2 break-words text-xs leading-[17px] text-white/38">
-                              {clipSlug ? `Twitch clip: ${clipSlug}` : clip.url}
-                            </p>
-                          </div>
-                          <button
-                            aria-label={
-                              clip.priority
-                                ? `Remove ${clip.title} from priority`
-                                : `Prioritise ${clip.title}`
-                            }
-                            className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg border ${
-                              clip.priority
-                                ? "border-[#facc15]/55 bg-[#facc15] text-black"
-                                : "border-white/12 bg-white/[0.055] text-white/60 hover:text-white"
-                            } disabled:cursor-not-allowed disabled:opacity-50`}
-                            disabled={!isAdmin || busyAction === `priority-${clip.id}`}
-                            onClick={() => togglePriority(clip)}
-                            title={isAdmin ? "Toggle priority" : "Admins set priority"}
-                            type="button"
-                          >
-                            <Star
-                              aria-hidden="true"
-                              fill={clip.priority ? "currentColor" : "none"}
-                              size={18}
-                            />
-                          </button>
-                        </div>
-
-                        {clip.notes ? (
-                          <p className="mb-4 line-clamp-3 rounded-lg border border-white/10 bg-white/[0.045] p-3 text-sm leading-5 text-white/58">
-                            {clip.notes}
-                          </p>
-                        ) : null}
-
-                        <div className="grid gap-2 text-xs text-white/50 sm:grid-cols-3">
-                          <span className="flex min-w-0 items-center gap-2">
-                            <Clock3 aria-hidden="true" className="shrink-0" size={14} />
-                            <span className="min-w-0 truncate">
-                              {formatDate(clip.createdAt)}
-                            </span>
-                          </span>
-                          <span className="flex min-w-0 items-center gap-2">
-                            <UserRound
-                              aria-hidden="true"
-                              className="shrink-0"
-                              size={14}
-                            />
-                            <span className="min-w-0 truncate">{clip.assignee}</span>
-                          </span>
-                          <span className="flex min-w-0 items-center gap-2">
-                            <Tags aria-hidden="true" className="shrink-0" size={14} />
-                            <span>{clip.priority ? "Priority" : "Normal"}</span>
-                          </span>
-                        </div>
-
-                        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/10 pt-4">
-                          <button
-                            className="inline-flex h-10 items-center gap-2 rounded-lg bg-white px-3 text-sm font-bold text-[#18181b] hover:bg-[#efe7ff] disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={!canAdvance || busyAction === `advance-${clip.id}`}
-                            onClick={() => advanceClip(clip)}
-                            type="button"
-                          >
-                            <CheckCircle2 aria-hidden="true" size={16} />
-                            {actionLabel}
-                          </button>
-                          <a
-                            className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.055] px-3 text-sm font-bold text-white/72 hover:border-white/24 hover:text-white"
-                            href={clip.url}
-                            rel="noreferrer"
-                            target="_blank"
-                          >
-                            <ExternalLink aria-hidden="true" size={16} />
-                            Open on Twitch
-                          </a>
-                          {isAdmin ? (
-                            <button
-                              className="ml-auto grid h-10 w-10 place-items-center rounded-lg border border-white/10 bg-white/[0.045] text-white/48 hover:border-[#ff6b6b]/40 hover:text-[#ffb4b4] disabled:cursor-not-allowed disabled:opacity-50"
-                              disabled={busyAction === `delete-${clip.id}`}
-                              onClick={() => removeClip(clip)}
-                              title="Remove clip"
-                              type="button"
-                            >
-                              <Trash2 aria-hidden="true" size={16} />
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-                    </article>
-                  );
-                })}
+            {filteredTasks.length > 0 ? (
+              <div className="task-grid">
+                {filteredTasks.map((task) =>
+                  task.kind === "clip" ? (
+                    <StandaloneClipCard
+                      key={`clip-${task.clip.id}`}
+                      busyAction={busyAction}
+                      clip={task.clip}
+                      currentUsername={currentMember.username}
+                      embedHost={embedHost}
+                      isAdmin={isAdmin}
+                      onAdvance={advanceClip}
+                      onResetProgress={resetClipProgress}
+                      onDelete={removeClip}
+                      onTogglePriority={togglePriority}
+                      onUpdate={updateClipDetails}
+                    />
+                  ) : (
+                    <CollectionCard
+                      key={`collection-${task.collection.id}`}
+                      busyAction={busyAction}
+                      collection={task.collection}
+                      currentUsername={currentMember.username}
+                      embedHost={embedHost}
+                      isAdmin={isAdmin}
+                      onAddClip={addClipToCollection}
+                      onAdvance={advanceCollection}
+                      onResetProgress={resetCollectionProgress}
+                      onDelete={dissolveCollection}
+                      onRemoveClip={removeClipFromCollection}
+                      onReorderClip={reorderCollectionClip}
+                      onTogglePriority={toggleCollectionPriority}
+                      onUpdate={updateCollectionDetails}
+                    />
+                  ),
+                )}
               </div>
             ) : (
-              <div className="rounded-lg border border-white/10 bg-[#18181b] p-10 text-center">
-                <div className="mx-auto mb-5 grid h-14 w-14 place-items-center rounded-lg bg-[#9146ff]/16 text-[#dac8ff]">
+              <div className="rounded-[14px] border border-dashed border-white/[0.09] bg-white/[0.015] p-12 text-center">
+                <div className="mx-auto mb-5 grid h-12 w-12 place-items-center rounded-[12px] border border-[#9146ff]/20 bg-[#9146ff]/8 text-[#c9b0ff]">
                   <Clapperboard aria-hidden="true" size={26} />
                 </div>
-                <p className="text-xl font-black">No clips found</p>
+                <p className="text-xl font-black">No tasks found</p>
                 <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-white/50">
-                  {categoryFilter === "trusted"
-                    ? "Add trusted Twitch usernames, then sync clips from the source channel."
+                  {query.trim() || hasViewOptions
+                    ? "No matches in this category. Try fewer keywords, reset your filters, or choose another category."
+                    : categoryFilter === "trusted"
+                    ? isAdmin
+                      ? "Add trusted Twitch usernames, then sync clips from the source channel."
+                      : "No trusted-source clips are in the queue yet."
                     : "Try a different search or category."}
                 </p>
               </div>
             )}
+
           </section>
 
-          <aside className="space-y-5">
-            <section className="rounded-lg border border-white/10 bg-[#18181b] p-4">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-semibold">Access list</p>
-                  <p className="text-xs text-white/44">
-                    {roomState.memberCount}/{roomState.maxMembers} people
-                  </p>
+          <aside className="workspace-panels" data-collapsed={rightPanelsCollapsed ? "true" : "false"}>
+            <button
+              aria-label={rightPanelsCollapsed ? "Expand right panel" : "Collapse right panel"}
+              className="workspace-panel-toggle"
+              onClick={toggleRightPanels}
+              title={rightPanelsCollapsed ? "Expand right panel" : "Collapse right panel"}
+              type="button"
+            >
+              {rightPanelsCollapsed ? <ChevronLeft aria-hidden="true" size={16} /> : <ChevronRight aria-hidden="true" size={16} />}
+            </button>
+            <div className="workspace-panel-rail" aria-hidden="true" />
+            <div
+              aria-hidden={rightPanelsCollapsed ? "true" : undefined}
+              className="workspace-panel-viewport"
+              inert={rightPanelsCollapsed}
+            >
+              <div className="workspace-panel-content">
+            {isAdmin ? (
+              <section className="rounded-[14px] border border-white/[0.075] bg-[#141416] p-4">
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-bold">Team</p>
+                    <p className="text-xs text-white/44">
+                      {roomState.memberCount}/{roomState.maxMembers} people · Twitch verified
+                    </p>
+                  </div>
+                  <span className="grid h-9 w-9 place-items-center rounded-[10px] border border-[#9146ff]/20 bg-[#9146ff]/9 text-[#c9b0ff]">
+                    <UserRound aria-hidden="true" size={18} />
+                  </span>
                 </div>
-                <span className="grid h-9 w-9 place-items-center rounded-lg bg-[#2dd4bf]/14 text-[#adfff6]">
-                  <Mail aria-hidden="true" size={18} />
-                </span>
-              </div>
 
-              {isAdmin ? (
-                <>
-                  <form className="space-y-3" onSubmit={addMember}>
-                    <input
-                      aria-label="Member email"
-                      className="h-11 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-sm text-white outline-none placeholder:text-white/32 focus:border-[#2dd4bf]"
-                      onChange={(event) => setMemberEmail(event.target.value)}
-                      placeholder="editor@email.com"
-                      type="email"
-                      value={memberEmail}
-                    />
-                    <div className="grid grid-cols-[1fr_auto] gap-2">
-                      <div
-                        aria-label="Member role"
-                        className="grid h-11 grid-cols-2 gap-1 rounded-lg border border-white/10 bg-white/[0.06] p-1"
-                        role="radiogroup"
-                      >
-                        {(["Clipper", "Admin"] as MemberRole[]).map((role) => (
-                          <button
-                            key={role}
-                            aria-checked={memberRole === role}
-                            className={`rounded-md px-2 text-xs font-bold ${
-                              memberRole === role
-                                ? "bg-[#2dd4bf] text-[#071b19]"
-                                : "text-white/52 hover:bg-white/[0.07] hover:text-white"
+                <form autoComplete="off" className="space-y-3" onSubmit={addMember}>
+                  <input
+                    aria-label="Twitch username"
+                    autoCapitalize="none"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    className="h-11 w-full rounded-[10px] border border-white/[0.075] bg-white/[0.035] px-3 text-sm text-white outline-none placeholder:text-white/24 focus:border-[#9146ff]/55 focus:bg-white/[0.05]"
+                    maxLength={maxTwitchLoginLength}
+                    onChange={(event) => setMemberUsername(event.target.value)}
+                    placeholder="Twitch username"
+                    spellCheck={false}
+                    type="text"
+                    value={memberUsername}
+                  />
+                  <div className="grid grid-cols-[1fr_auto] gap-2">
+                    <div
+                      aria-label="Member role"
+                      className="grid h-11 grid-cols-2 gap-1 rounded-[10px] border border-white/[0.075] bg-white/[0.035] p-1"
+                      role="radiogroup"
+                    >
+                      {(["Clipper", "Admin"] as MemberRole[]).map((role) => (
+                        <button
+                          key={role}
+                          aria-checked={memberRole === role}
+                          className={`rounded-md px-2 text-xs font-bold ${
+                            memberRole === role
+                              ? "bg-[#9146ff] text-white"
+                              : "text-white/38 hover:bg-white/[0.05] hover:text-white/72"
+                          }`}
+                          onClick={() => setMemberRole(role)}
+                          onKeyDown={submitParentFormOnEnter}
+                          role="radio"
+                          type="button"
+                        >
+                          {role}
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      className="inline-flex h-11 items-center gap-2 rounded-[10px] bg-[#9146ff] px-4 text-sm font-bold text-white hover:bg-[#a05cff] disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={busyAction === "add-member"}
+                      type="submit"
+                    >
+                      <Plus aria-hidden="true" size={17} />
+                      Add
+                    </button>
+                  </div>
+                </form>
+
+                <div className="mt-4 divide-y divide-white/[0.06] overflow-hidden rounded-[10px] border border-white/[0.065] bg-white/[0.018]">
+                  {members.map((member) => (
+                    <div
+                      key={member.id}
+                      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-3 py-3"
+                    >
+                      {member.avatarUrl ? (
+                        <img
+                          alt=""
+                          className="h-9 w-9 shrink-0 rounded-[9px] border border-white/[0.07] object-cover"
+                          src={member.avatarUrl}
+                        />
+                      ) : (
+                        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-[9px] border border-[#9146ff]/20 bg-[#9146ff]/10 text-[#d7c5ff]">
+                          {member.role === "Admin" ? (
+                            <Crown aria-hidden="true" size={16} />
+                          ) : (
+                            <UserRound aria-hidden="true" size={16} />
+                          )}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2">
+                          <p className="break-words text-sm font-semibold leading-5">{member.displayName}</p>
+                          <span
+                            className={`inline-flex h-5 min-w-[54px] items-center justify-center rounded border px-1.5 text-[10px] font-bold leading-none ${
+                              member.role === "Admin"
+                                ? "border-[#9146ff]/28 bg-[#9146ff]/10 text-[#dacaff]"
+                                : "border-[#2dd4bf]/28 bg-[#2dd4bf]/8 text-[#b9fff7]"
                             }`}
-                            onClick={() => setMemberRole(role)}
-                            role="radio"
-                            type="button"
                           >
-                            {role}
-                          </button>
-                        ))}
+                            {member.role}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 break-words text-xs leading-5 text-white/40">
+                          @{member.username} · added {formatUserDate(member.addedAt)}
+                        </p>
                       </div>
                       <button
-                        className="inline-flex h-11 items-center gap-2 rounded-lg bg-[#2dd4bf] px-4 text-sm font-black text-[#071b19] hover:bg-[#5eeadd] disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={busyAction === "add-member"}
-                        type="submit"
+                        className="grid h-8 w-8 shrink-0 place-items-center rounded-[8px] border border-white/[0.07] bg-white/[0.02] text-white/32 hover:border-[#ff6b6b]/30 hover:bg-[#ff6b6b]/5 hover:text-[#ffaaaa] disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={
+                          currentMember.id === member.id ||
+                          busyAction === `remove-${member.id}`
+                        }
+                        onClick={() => removeAccess(member)}
+                        title="Remove access"
+                        type="button"
                       >
-                        <Plus aria-hidden="true" size={17} />
-                        Add
+                        <Trash2 aria-hidden="true" size={14} />
                       </button>
                     </div>
-                  </form>
-
-                  <div className="mt-4 space-y-2">
-                    {members.map((member) => (
-                      <div
-                        key={member.id}
-                        className="rounded-lg border border-white/10 bg-white/[0.045] p-3"
-                      >
-                        <div className="mb-3 flex items-center gap-3">
-                          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/10">
-                            {member.role === "Admin" ? (
-                              <Crown aria-hidden="true" size={16} />
-                            ) : (
-                              <UserRound aria-hidden="true" size={16} />
-                            )}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-semibold">
-                              {member.email}
-                            </p>
-                            <p className="text-xs text-white/40">
-                              {member.role} - added {formatDate(member.addedAt)}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-[1fr_auto] gap-2">
-                          <button
-                            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.055] px-3 text-xs font-bold text-white/70 hover:border-white/24 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={busyAction === `invite-${member.id}`}
-                            onClick={() => regenerateMemberInvite(member)}
-                            type="button"
-                          >
-                            <Copy aria-hidden="true" size={14} />
-                            Invite
-                          </button>
-                          <button
-                            className="grid h-9 w-9 place-items-center rounded-lg border border-white/10 bg-white/[0.045] text-white/48 hover:border-[#ff6b6b]/40 hover:text-[#ffb4b4] disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={
-                              currentMember.id === member.id ||
-                              busyAction === `remove-${member.id}`
-                            }
-                            onClick={() => removeAccess(member)}
-                            title="Remove access"
-                            type="button"
-                          >
-                            <Trash2 aria-hidden="true" size={15} />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <div className="rounded-lg border border-white/10 bg-white/[0.045] p-4 text-sm leading-6 text-white/54">
-                  Access is managed by admins. Your queue updates here as clips
-                  are added, claimed, and posted.
+                  ))}
                 </div>
-              )}
-            </section>
+              </section>
+            ) : null}
 
-            <section className="rounded-lg border border-white/10 bg-[#18181b] p-4">
+            <section className="rounded-[14px] border border-white/[0.075] bg-[#141416] p-4">
               <div className="mb-4 flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-semibold">Twitch source</p>
+                  <p className="text-sm font-bold">Twitch source</p>
                   <p className="text-xs text-white/44">
                     {roomState.trustedClipperLogins.length} trusted clipper
                     {roomState.trustedClipperLogins.length === 1 ? "" : "s"}
@@ -1165,69 +1542,109 @@ export default function Home() {
                 </div>
                 <Clapperboard
                   aria-hidden="true"
-                  className="text-[#9146ff]"
+                  className="text-[#b68cff]"
                   size={24}
                 />
               </div>
-              <form className="space-y-3" onSubmit={saveChannel}>
-                <label className="flex h-11 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 text-sm text-white/54 focus-within:border-[#9146ff]">
-                  <span className="text-white/36">twitch.tv/</span>
-                  <input
-                    aria-label="Twitch channel"
-                    className="h-full min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/30 disabled:text-white/48"
-                    disabled={!isAdmin}
-                    onChange={(event) => setChannelInput(event.target.value)}
-                    placeholder="channel"
-                    value={channelInput}
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1.5 block text-xs font-semibold text-white/48">
-                    Trusted clippers
-                  </span>
-                  <input
-                    aria-label="Trusted Twitch clippers"
-                    className="h-11 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-[#2dd4bf] disabled:text-white/48"
-                    disabled={!isAdmin}
-                    onChange={(event) => setTrustedClippersInput(event.target.value)}
-                    placeholder="username, anotherusername"
-                    value={trustedClippersInput}
-                  />
-                  <p className="mt-2 text-xs leading-5 text-white/42">
-                    Sync saves clips created by these Twitch users into the
-                    Trusted clippers lane.
-                  </p>
-                </label>
+              <form autoComplete="off" className="space-y-3" onSubmit={saveChannel}>
                 {isAdmin ? (
-                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                  <>
+                    <label className="flex h-11 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 text-sm text-white/54">
+                      <span className="text-white/36">twitch.tv/</span>
+                      <input autoComplete="off"
+                        aria-label="Twitch channel"
+                        className="h-full min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/30"
+                        maxLength={maxTwitchLoginLength}
+                        onChange={(event) => setChannelInput(event.target.value)}
+                        placeholder="channel"
+                        value={channelInput}
+                      />
+                    </label>
+                    <div>
+                      <label htmlFor="trusted-clippers" className="mb-1.5 inline-block text-xs font-semibold text-white/48">
+                        Trusted clippers
+                      </label>
+                      <textarea autoComplete="off"
+                        id="trusted-clippers"
+                        aria-label="Trusted Twitch clippers"
+                        className="block min-h-16 max-h-48 w-full resize-y overflow-y-auto rounded-lg border border-white/10 bg-white/[0.06] px-3 py-3 text-sm leading-5 text-white outline-none placeholder:text-white/30 focus:border-[#9146ff]/60 [field-sizing:content]"
+                        maxLength={maxTrustedClippersTextLength}
+                        onChange={(event) => setTrustedClippersInput(event.target.value)}
+                        placeholder="username, anotherusername"
+                        rows={2}
+                        value={trustedClippersInput}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="space-y-3">
+                    <div
+                      aria-label="Twitch channel value"
+                      className="flex h-11 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.045] px-3 text-sm text-white/54"
+                    >
+                      <span className="text-white/34">twitch.tv/</span>
+                      <span className="min-w-0 truncate text-white/64">{roomState.sourceChannel}</span>
+                    </div>
+                    <div>
+                      <span className="mb-1.5 block text-xs font-semibold text-white/48">
+                        Trusted clippers
+                      </span>
+                      <div
+                        aria-label="Trusted Twitch clippers value"
+                        className="min-h-11 rounded-lg border border-white/10 bg-white/[0.045] px-3 py-3 text-sm leading-5 text-white/64"
+                      >
+                        {roomState.trustedClipperLogins.length
+                          ? roomState.trustedClipperLogins.join(", ")
+                          : "No trusted clippers yet"}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <p className="text-xs leading-5 text-white/42">
+                  Import clips from {roomState.sourceChannel}&apos;s channel from the last 24 hours, made by the listed clippers. New clips appear under Trusted clippers; existing clips are not duplicated.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {isAdmin ? (
                     <button
-                      className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[#9146ff] text-sm font-bold text-white hover:bg-[#7c3aed] disabled:cursor-not-allowed disabled:opacity-60"
+                      className="inline-flex h-10 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-[10px] border border-[#a970ff]/35 bg-[linear-gradient(135deg,#9146ff,#a855f7)] px-3 text-[13px] font-bold text-white shadow-[0_10px_24px_rgba(145,70,255,0.2)] hover:brightness-110 disabled:opacity-60"
                       disabled={busyAction === "source"}
                       type="submit"
                     >
                       <RefreshCw aria-hidden="true" size={17} />
-                      Set source
+                      Save source
                     </button>
-                    <button
-                      className="inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.055] px-3 text-sm font-bold text-white/70 hover:border-white/24 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={busyAction === "sync"}
-                      onClick={syncTwitch}
-                      type="button"
-                    >
-                      <Clapperboard aria-hidden="true" size={17} />
-                      Sync clips
-                    </button>
-                  </div>
+                  ) : null}
+                  <button
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-[9px] border border-white/[0.07] bg-white/[0.025] px-3 text-[13px] font-semibold text-white/48 hover:border-white/13 hover:bg-white/[0.05] hover:text-white/76 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={
+                      busyAction === "sync" || !roomState.twitchSyncAvailable
+                    }
+                    onClick={syncTwitch}
+                    title={
+                      roomState.twitchSyncAvailable
+                        ? "Sync recent clips from trusted Twitch clippers"
+                        : "Add Twitch API secrets to enable sync"
+                    }
+                    type="button"
+                  >
+                    <Clapperboard aria-hidden="true" size={17} />
+                    Sync clips
+                  </button>
+                </div>
+                {!roomState.twitchSyncAvailable ? (
+                  <p className="text-xs leading-5 text-white/42">
+                    Twitch sync is not available in this room yet. You can still add clips by pasting a Twitch URL.
+                  </p>
                 ) : null}
               </form>
             </section>
 
-            <section className="rounded-lg border border-white/10 bg-[#18181b] p-4">
+            <section className="rounded-[14px] border border-white/[0.075] bg-[#141416] p-4">
               <div className="mb-4 flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-semibold">Priority queue</p>
+                  <p className="text-sm font-bold">Priority queue</p>
                   <p className="text-xs text-white/44">
-                    {priorityClips.length} selected
+                    {priorityTasks.length} selected
                   </p>
                 </div>
                 <span className="grid h-9 w-9 place-items-center rounded-lg bg-[#ffcc66]/14 text-[#ffe2a3]">
@@ -1235,32 +1652,43 @@ export default function Home() {
                 </span>
               </div>
               <div className="space-y-2">
-                {priorityClips.map((clip, index) => (
-                  <div
-                    key={clip.id}
-                    className="rounded-lg border border-white/10 bg-white/[0.045] p-3"
-                  >
-                    <div className="mb-2 flex items-center gap-2">
-                      <span className="grid h-6 w-6 place-items-center rounded-md bg-white text-xs font-black text-[#18181b]">
-                        {index + 1}
-                      </span>
-                      <span className="text-xs text-white/42">{clip.status}</span>
+                {priorityTasks.map((task, index) => {
+                  const item = task.kind === "clip" ? task.clip : task.collection;
+                  return (
+                    <div
+                      key={`${task.kind}-${item.id}`}
+                      className="rounded-[10px] border border-white/[0.065] bg-white/[0.025] p-3"
+                    >
+                      <div className="mb-2 flex items-center gap-2">
+                        <span className="grid h-6 w-6 place-items-center rounded-md bg-white text-xs font-black text-[#18181b]">
+                          {index + 1}
+                        </span>
+                        <span className="text-xs text-white/42">{item.status}</span>
+                        {task.kind === "collection" ? (
+                          <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#b68cff]">
+                            Collection · {task.collection.clips.length}
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="line-clamp-3 text-sm font-semibold leading-5">
+                        {item.title}
+                      </p>
                     </div>
-                    <p className="line-clamp-3 text-sm font-semibold leading-5">
-                      {clip.title}
-                    </p>
-                  </div>
-                ))}
-                {priorityClips.length === 0 ? (
+                  );
+                })}
+                {priorityTasks.length === 0 ? (
                   <div className="rounded-lg border border-dashed border-white/16 p-4 text-center text-sm text-white/42">
-                    No priority clips.
+                    No priority tasks.
                   </div>
                 ) : null}
               </div>
             </section>
+              </div>
+            </div>
           </aside>
         </div>
       </div>
     </main>
+    </ClipPreviewProvider>
   );
 }

@@ -5,26 +5,33 @@ const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://cliproom.sevenclipr
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
-  title: 'ClipRoom | Private Twitch Clip Queue',
+  title: 'ClipRoom | Private Clip Queue',
   description:
-    'A private Twitch clip queue where creator teams can review clips, prioritise edits, assign access, and track what has been posted.',
+    'A private clip queue for creator teams to review, organise, and track Twitch and Kick clips.',
+  icons: {
+    icon: [
+      { url: '/favicon.png?v=cliproom-2', type: 'image/png', sizes: '64x64' },
+      { url: '/favicon.svg?v=cliproom-2', type: 'image/svg+xml', sizes: 'any' },
+    ],
+    apple: { url: '/apple-touch-icon.png?v=cliproom-2', sizes: '180x180', type: 'image/png' },
+  },
   openGraph: {
-    title: 'ClipRoom | Private Twitch Clip Queue',
-    description: 'Review, claim, prioritise, and publish Twitch clips with a trusted creator team.',
+    title: 'ClipRoom | Private Clip Queue',
+    description: 'Your team’s clip queue. Review, organise, and track Twitch and Kick clips together.',
     images: [
       {
-        url: '/og.png',
+        url: '/og.png?v=cliproom-3',
         width: 1200,
         height: 630,
-        alt: 'ClipRoom private clip queues for creator teams',
+        alt: 'ClipRoom — Your team’s clip queue',
       },
     ],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'ClipRoom | Private Twitch Clip Queue',
-    description: 'Review, claim, prioritise, and publish Twitch clips with a trusted creator team.',
-    images: ['/og.png'],
+    title: 'ClipRoom | Private Clip Queue',
+    description: 'Your team’s clip queue. Review, organise, and track Twitch and Kick clips together.',
+    images: ['/og.png?v=cliproom-3'],
   },
 };
 
