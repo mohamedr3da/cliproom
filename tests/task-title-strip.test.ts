@@ -21,11 +21,11 @@ test("task cards use plain clamped titles without expandable controls", async ()
     assert.doesNotMatch(card, /TaskTitleStrip/);
   }
 
-  assert.match(css, /\.task-card-title-text\s*\{[\s\S]*?-webkit-line-clamp:\s*2/);
+  assert.match(css, /\.task-card-title-text\s*\{[\s\S]*?-webkit-line-clamp:\s*3/);
   assert.doesNotMatch(css, /\.task-title-strip/);
 });
 
-test("task title limits are short enough to keep normal and collapsed cards readable", async () => {
+test("task title limits preserve useful title context while cards visually clamp overflow", async () => {
   const sharedModule = await import("../lib/cliproom/shared.ts");
   const normaliseTaskTitle = sharedModule.normaliseTaskTitle as
     | ((value: unknown, fallback?: string) => string)
@@ -38,14 +38,16 @@ test("task title limits are short enough to keep normal and collapsed cards read
     read("lib/cliproom/server.ts"),
   ]);
 
-  assert.equal(sharedModule.maxClipTitleLength, 60);
-  assert.equal(sharedModule.maxCollectionTitleLength, 60);
+  assert.equal(sharedModule.maxClipTitleLength, 120);
+  assert.equal(sharedModule.maxCollectionTitleLength, 120);
   assert.equal(sharedModule.maxTaskTitleSegmentLength, 14);
   assert.equal(typeof normaliseTaskTitle, "function");
   assert.equal(typeof formatTaskTitleForDisplay, "function");
-  assert.equal(normaliseTaskTitle(` ${"a".repeat(100)} `).length, 60);
-  assert.match(normaliseTaskTitle("a".repeat(100)), /\.\.\.$/);
+  assert.equal(normaliseTaskTitle(` ${"a".repeat(150)} `).length, 120);
+  assert.match(normaliseTaskTitle("a".repeat(150)), /\.\.\.$/);
   assert.equal(normaliseTaskTitle("   ", "Fallback title"), "Fallback title");
+  const usefulLongTitle = Array.from({ length: 8 }, () => "740 to 11k!!!").join(" ");
+  assert.equal(normaliseTaskTitle(usefulLongTitle), usefulLongTitle);
 
   const joinedChunk = "ome67 ome67 ome67 ome67vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv";
   const spacedWords = "asdsd asdsd asdsd asdsd asdsd asdsd asdsd asdsd asdsd asdsd2";

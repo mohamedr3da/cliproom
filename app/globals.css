@@ -41,6 +41,56 @@ button {
   transition: border-color 120ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
+.queue-card[data-select-mode="true"] {
+  cursor: pointer;
+}
+
+.queue-card[data-selected="true"] {
+  border-color: rgb(145 70 255 / 0.72);
+  box-shadow:
+    0 0 0 1px rgb(145 70 255 / 0.42),
+    0 18px 42px rgb(145 70 255 / 0.13);
+}
+
+.task-card-select-toggle {
+  position: absolute;
+  right: 0.75rem;
+  top: 0.75rem;
+  z-index: 35;
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 0.16);
+  border-radius: 999px;
+  background: rgb(8 8 10 / 0.78);
+  color: rgb(255 255 255 / 0.42);
+  box-shadow: 0 10px 24px rgb(0 0 0 / 0.34);
+  backdrop-filter: blur(12px);
+}
+
+.task-card-select-toggle[aria-pressed="true"] {
+  border-color: rgb(145 70 255 / 0.85);
+  background: #9146ff;
+  color: white;
+}
+
+.task-card-media-select-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: rgb(0 0 0 / 0.08);
+  cursor: pointer;
+}
+
+.task-card-media-select-cover[aria-pressed="true"] {
+  background: rgb(145 70 255 / 0.12);
+}
+
 .task-card-actions {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr) 2.5rem;
@@ -97,17 +147,17 @@ button {
 }
 
 .task-card-title-copy {
-  min-height: 2.5rem;
+  min-height: 3.75rem;
 }
 
 .task-card-title-text {
   display: -webkit-box;
-  min-height: 2.5rem;
+  min-height: 3.75rem;
   margin: 0;
   overflow: hidden;
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   font-size: 0.875rem;
   font-weight: 700;
   line-height: 1.25rem;
@@ -115,18 +165,18 @@ button {
 }
 
 .task-card-notes {
-  min-height: 4.25rem;
+  min-height: 3rem;
+  padding-block: 0.625rem;
 }
 
 .task-card-notes-text {
-  display: -webkit-box;
-  min-height: 3.75rem;
-  max-height: 3.75rem;
+  display: block;
+  min-height: 2.5rem;
+  max-height: 2.5rem;
   margin: 0;
   overflow: hidden;
   overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  text-overflow: clip;
   color: rgb(255 255 255 / 0.48);
   font-size: 0.8125rem;
   line-height: 1.25rem;
@@ -135,7 +185,7 @@ button {
 
 .task-card-meta {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  grid-template-columns: minmax(0, 1fr) max-content;
   align-items: center;
   gap: 0.5rem;
 }
@@ -144,14 +194,6 @@ button {
 .task-card-meta-priority {
   white-space: nowrap;
 }
-
-.task-card-meta-assignee {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 
 @container task-card (max-width: 21.5rem) {
   .task-badges-wide {
@@ -226,6 +268,23 @@ a > svg {
 .queue-section {
   min-width: 0;
   container: queue / inline-size;
+}
+
+.selection-bar {
+  position: sticky;
+  bottom: 1rem;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  border: 1px solid rgb(145 70 255 / 0.24);
+  border-radius: 14px;
+  background: rgb(20 20 24 / 0.92);
+  padding: 0.85rem 1rem;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.38);
+  backdrop-filter: blur(18px);
 }
 
 .task-grid {

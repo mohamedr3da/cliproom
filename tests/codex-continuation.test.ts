@@ -40,7 +40,7 @@ test("Kick playback falls back to the clip channel listing before giving up", as
   assert.match(server, /new URLSearchParams\(\{ sort: "date", time: "all" \}\)/);
 });
 
-test("standalone clips and Collections expose a reset-progress action in edit mode", async () => {
+test("standalone clips and Collections hide reset-progress workflow in library mode", async () => {
   const [clipCard, collectionCard, clipRoute, collectionRoute, server, page] = await Promise.all([
     read("components/cliproom/StandaloneClipCard.tsx"),
     read("components/cliproom/CollectionCard.tsx"),
@@ -49,16 +49,16 @@ test("standalone clips and Collections expose a reset-progress action in edit mo
     read("lib/cliproom/server.ts"),
     read("app/page.tsx"),
   ]);
-  assert.match(clipCard, /Reset progress/);
-  assert.match(collectionCard, /Reset progress/);
+  assert.doesNotMatch(clipCard, /Reset progress/);
+  assert.doesNotMatch(collectionCard, /Reset progress/);
   assert.match(clipCard, /editOpen/);
   assert.match(collectionCard, /editOpen/);
   assert.match(clipRoute, /action === "resetProgress"/);
   assert.match(collectionRoute, /action === "resetProgress"/);
   assert.match(server, /export async function resetClipProgress/);
   assert.match(server, /export async function resetCollectionProgress/);
-  assert.match(page, /resetClipProgress/);
-  assert.match(page, /resetCollectionProgress/);
+  assert.doesNotMatch(page, /resetClipProgress/);
+  assert.doesNotMatch(page, /resetCollectionProgress/);
 });
 
 test("primary task actions use one stable shared geometry", async () => {

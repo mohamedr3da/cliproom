@@ -3,6 +3,7 @@
 import { ChevronDown, RotateCcw, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { formatUserDate } from "@/components/cliproom/date-format";
+import { deletedTaskRetentionDays } from "@/lib/cliproom/shared";
 import type { Clip, Collection, RoomState } from "@/lib/cliproom/shared";
 
 type DeletedTask = Clip | Collection;
@@ -34,7 +35,7 @@ export function RecentlyDeleted({ trash, busyAction, onRestore, onPermanentDelet
       <ChevronDown aria-hidden="true" className="ml-auto transition-transform group-open/trash:rotate-180" size={14} />
     </summary>
     <div className="border-t border-white/[0.06] px-3.5 pb-3.5 pt-3">
-      <p className="mb-3 text-xs leading-5 text-white/40">Posted tasks move here after 24 hours. Deleted tasks are permanently removed after another 24 hours. Restore them before then to keep them. Restoring a posted task returns it to New.</p>
+      <p className="mb-3 text-xs leading-5 text-white/40">Deleted clips and collections stay here for {deletedTaskRetentionDays} days before being removed forever. Restore them before then to keep them.</p>
       {tasks.length ? <ul className="max-h-80 space-y-2 overflow-y-auto">{tasks.map(({ kind, task }) => <li className="flex flex-wrap items-center gap-3 rounded-lg border border-white/[0.06] bg-[#17161c] p-3" key={`${kind}-${task.id}`}>
         <div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold text-white/80" title={task.title}>{task.title}</p><p className="mt-1 text-[11px] text-white/35">{kind === "collection" ? "Collection" : "Clip"} · {deletedMeta(task)}</p></div>
         <button className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-[#9146ff]/25 bg-[#9146ff]/10 px-2.5 text-xs font-semibold text-[#cdb5ff] hover:bg-[#9146ff]/20 disabled:opacity-40" disabled={busyAction === `restore-${task.id}`} onClick={() => void onRestore(kind, task.id, task.title)} type="button"><RotateCcw aria-hidden="true" size={13} />Restore<span className="sr-only"> {task.title}</span></button>

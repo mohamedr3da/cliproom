@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { useClipPreviews } from "./ClipPreviewProvider";
 
 type Props = { clipId: string; platform: "Twitch" | "Kick"; src: string; title: string; url: string };
+type FrameSize = { width: number; height: number };
 
 function syncIframeSize(container: HTMLDivElement, iframe: HTMLIFrameElement, width?: number, height?: number) {
   const rect = width && height ? { width, height } : container.getBoundingClientRect();
@@ -24,31 +25,36 @@ function TwitchEmbedSurface({ clipId, platform, src, title, url }: Props) {
   const [slow, setSlow] = useState(false);
   const [failedImage, setFailedImage] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [frameSize, setFrameSize] = useState<FrameSize>({ width: 0, height: 0 });
   const containerRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const thumbnail = thumbnails[clipId];
-  useEffect(() => {
-    if (!active || loaded) return;
-    const timer = window.setTimeout(() => setSlow(true), 12000);
-    return () => window.clearTimeout(timer);
-  }, [active, loaded, attempt]);
+  const frameReady = frameSize.width > 0 && frameSize.height > 0;
 
   useEffect(() => {
-    if (!active) return;
     const container = containerRef.current;
-    const iframe = iframeRef.current;
-    if (!container || !iframe) return;
+    if (!container) return;
 
     let frame = 0;
-    const resize = (width?: number, height?: number) => {
+    const measure = (width?: number, height?: number) => {
       window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(() => syncIframeSize(container, iframe, width, height));
+      frame = window.requestAnimationFrame(() => {
+        const rect = width && height ? { width, height } : container.getBoundingClientRect();
+        const nextWidth = Math.max(1, Math.round(rect.width));
+        const nextHeight = Math.max(1, Math.round(rect.height));
+        setFrameSize((current) =>
+          current.width === nextWidth && current.height === nextHeight
+            ? current
+            : { width: nextWidth, height: nextHeight },
+        );
+        if (iframeRef.current) syncIframeSize(container, iframeRef.current, nextWidth, nextHeight);
+      });
     };
 
-    resize();
+    measure();
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
-      resize(entry?.contentRect.width, entry?.contentRect.height);
+      measure(entry?.contentRect.width, entry?.contentRect.height);
     });
     observer.observe(container);
 
@@ -56,12 +62,26 @@ function TwitchEmbedSurface({ clipId, platform, src, title, url }: Props) {
       window.cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [active, attempt]);
+  }, []);
+
+  useEffect(() => {
+    if (!active || loaded) return;
+    const timer = window.setTimeout(() => setSlow(true), 12000);
+    return () => window.clearTimeout(timer);
+  }, [active, loaded, attempt]);
+
+  useEffect(() => {
+    if (!active || !frameReady) return;
+    const container = containerRef.current;
+    const iframe = iframeRef.current;
+    if (!container || !iframe) return;
+    syncIframeSize(container, iframe, frameSize.width, frameSize.height);
+  }, [active, attempt, frameReady, frameSize.height, frameSize.width]);
   function play() { setLoaded(false); setSlow(false); setAttempt((value) => value + 1); setActiveClipId(clipId); }
   return <div ref={containerRef} className="relative aspect-video overflow-hidden bg-[#101014]">
     {active ? <>
-      <iframe ref={iframeRef} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen className={`absolute inset-0 h-full w-full bg-[#101014] transition-opacity duration-150 ${loaded ? "opacity-100" : "opacity-0"}`} key={attempt} loading="eager" onLoad={() => { setLoaded(true); if (containerRef.current && iframeRef.current) syncIframeSize(containerRef.current, iframeRef.current); }} src={src.replace("autoplay=false", "autoplay=true")} title={title} />
-      {!loaded ? <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#101014] px-5 text-center" role="status">
+      {frameReady ? <iframe ref={iframeRef} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen className={`absolute inset-0 h-full w-full bg-[#101014] transition-opacity duration-150 ${loaded ? "opacity-100" : "opacity-0"}`} height={frameSize.height} key={attempt} loading="eager" onLoad={() => { setLoaded(true); if (containerRef.current && iframeRef.current) syncIframeSize(containerRef.current, iframeRef.current, frameSize.width, frameSize.height); }} src={src.replace("autoplay=false", "autoplay=true")} title={title} width={frameSize.width} /> : null}
+      {!loaded || !frameReady ? <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#101014] px-5 text-center" role="status">
         <LoaderCircle aria-hidden="true" className="animate-spin text-[#b68aff] motion-reduce:animate-none" size={28} />
         <p className="text-xs font-semibold text-white/65">{slow ? `${platform} is taking longer than usual` : `Opening ${platform} player…`}</p>
         {slow ? <div className="flex items-center gap-4 text-xs"><button className="text-[#cdb5ff]" onClick={play} type="button">Try again</button><a className="text-white/60 underline" href={url} rel="noreferrer" target="_blank">Open on {platform}</a></div> : null}

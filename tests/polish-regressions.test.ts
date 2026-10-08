@@ -15,7 +15,7 @@ test("Twitch access copy uses This instead of That", async () => {
 test("Room Stats is neutral instead of styling Clips as selected", async () => {
   const page = await source("app/page.tsx");
   const statsStart = page.indexOf(">Room stats<");
-  const statsEnd = page.indexOf("Private workspace for your creator team.", statsStart);
+  const statsEnd = page.indexOf("Private clip library for your creator team.", statsStart);
   const stats = page.slice(statsStart, statsEnd);
   assert.doesNotMatch(stats, /index === 0/);
   assert.doesNotMatch(stats, /bg-white\/\[0\.055\]/);
@@ -31,8 +31,8 @@ test("Team member identity metadata wraps instead of truncating", async () => {
 test("Team member access list uses compact rows with inline removal", async () => {
   const page = await source("app/page.tsx");
   const teamStart = page.indexOf(">Team<");
-  const sourceStart = page.indexOf(">Twitch source<", teamStart);
-  const teamSection = page.slice(teamStart, sourceStart);
+  const teamEnd = page.indexOf("</section>", teamStart);
+  const teamSection = page.slice(teamStart, teamEnd);
 
   assert.match(teamSection, /divide-y divide-white\/\[0\.06\]/);
   assert.match(teamSection, /grid grid-cols-\[auto_minmax\(0,1fr\)_auto\] items-center/);
@@ -50,8 +50,8 @@ test("queue cards stretch in a row and pin actions to the bottom without empty n
   assert.match(page, /className="task-grid"/);
   assert.match(globals, /\.task-grid\s*\{[^}]*align-items: stretch/);
   assert.doesNotMatch(page, /grid items-start gap-4 2xl:grid-cols-2/);
-  assert.match(standalone, /group flex h-full flex-col overflow-hidden/);
-  assert.match(collection, /group flex h-full flex-col overflow-hidden/);
+  assert.match(standalone, /group relative flex h-full flex-col overflow-hidden/);
+  assert.match(collection, /group relative flex h-full flex-col overflow-hidden/);
   assert.match(standalone, /<div className="mt-auto pt-1">/);
   assert.match(collection, /<div className="mt-auto pt-1">/);
   assert.doesNotMatch(standalone, /clip\.notes \? \([\s\S]*: \(\s*<p className="mb-4/);
@@ -75,8 +75,8 @@ test("Twitch embeds use a dark loading surface instead of flashing white", async
 test("Twitch source read-only view uses non-focusable display fields", async () => {
   const page = await source("app/page.tsx");
   const sourceStart = page.indexOf(">Twitch source<");
-  const priorityStart = page.indexOf(">Priority queue<", sourceStart);
-  const sourcePanel = page.slice(sourceStart, priorityStart);
+  const teamStart = page.indexOf(">Team<", sourceStart);
+  const sourcePanel = page.slice(sourceStart, teamStart);
 
   assert.match(sourcePanel, /aria-label="Twitch channel value"/);
   assert.match(sourcePanel, /aria-label="Trusted Twitch clippers value"/);

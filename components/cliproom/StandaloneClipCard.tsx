@@ -1,36 +1,34 @@
 "use client";
 
 import {
-  CheckCircle2,
+  Check,
   Clock3,
   ExternalLink,
+  Heart,
   Pencil,
-  RotateCcw,
   ShieldCheck,
   Star,
   Tags,
   Trash2,
-  UserRound,
 } from "lucide-react";
 import { useState } from "react";
 import { taskDomId } from "@/lib/cliproom/task-helpers";
-import type { FormEvent, KeyboardEvent } from "react";
+import type { FormEvent, KeyboardEvent, MouseEvent } from "react";
 
 import {
   categories,
+  defaultTaskNotes,
   formatTaskTitleForDisplay,
   getClipEmbedUrl,
   getClipPlatform,
   maxClipNotesLength,
   maxClipTitleLength,
+  normaliseTaskNotes,
 } from "@/lib/cliproom/shared";
 import type { Category, Clip } from "@/lib/cliproom/shared";
 import {
-  canAdvanceTask,
   categoryLabel,
   formatTaskDate,
-  statusStyles,
-  taskActionLabel,
 } from "@/components/cliproom/task-card-shared";
 import { KickClipPlayer } from "@/components/cliproom/KickClipPlayer";
 import { TaskInfoPopover } from "@/components/cliproom/TaskInfoPopover";
@@ -39,13 +37,14 @@ import { TwitchEmbedFrame, ExternalClipPreview } from "@/components/cliproom/Twi
 
 type Props = {
   clip: Clip;
-  currentUsername: string;
   isAdmin: boolean;
   embedHost: string;
   busyAction: string | null;
-  onAdvance: (clip: Clip) => void;
-  onResetProgress: (clip: Clip) => void;
+  selectMode: boolean;
+  selected: boolean;
   onDelete: (clip: Clip) => void;
+  onToggleSelected: (clip: Clip) => void;
+  onToggleSaved: (clip: Clip) => void;
   onTogglePriority: (clip: Clip) => void;
   onUpdate: (clip: Clip, input: { title: string; notes: string; category: Category }) => Promise<boolean>;
 };
@@ -56,38 +55,39 @@ function submitParentFormOnEnter(event: KeyboardEvent<HTMLButtonElement>) {
   event.currentTarget.form?.requestSubmit();
 }
 
+function shouldIgnoreSelectionToggle(target: EventTarget | null) {
+  return target instanceof Element && Boolean(target.closest("a,button,input,textarea,select,label"));
+}
+
+function notesInputValue(notes: string) {
+  return notes === defaultTaskNotes ? "" : notes;
+}
+
 export function StandaloneClipCard({
   clip,
-  currentUsername,
   isAdmin,
   embedHost,
   busyAction,
-  onAdvance,
-  onResetProgress,
+  selectMode,
+  selected,
   onDelete,
+  onToggleSelected,
+  onToggleSaved,
   onTogglePriority,
   onUpdate,
 }: Props) {
   const platform = getClipPlatform(clip.url);
   const embedUrl = platform === "Twitch" ? getClipEmbedUrl(clip.url, embedHost) : null;
   const isTrustedSync = clip.intakeSource === "trusted_sync";
-  const actionLabel = taskActionLabel(clip, currentUsername, isAdmin);
-  const canAdvance = canAdvanceTask(clip, currentUsername, isAdmin);
-  const canResetProgress = isAdmin || clip.assignee === currentUsername;
   const [editOpen, setEditOpen] = useState(false);
   const [editTitle, setEditTitle] = useState(clip.title);
   const [editNotes, setEditNotes] = useState(clip.notes);
   const [editCategory, setEditCategory] = useState<Category>(clip.category);
-  const statusBadge = (
-    <span className={`rounded border px-2.5 py-1 text-xs font-semibold ${statusStyles[clip.status]}`}>
-      {clip.status}
-    </span>
-  );
   const trustedBadge = isTrustedSync ? (
     <span className="inline-flex min-w-0 items-center gap-1 rounded border border-[#2dd4bf]/40 bg-[#2dd4bf]/12 px-2.5 py-1 text-xs font-semibold text-[#b9fff7]">
       <ShieldCheck aria-hidden="true" className="shrink-0" size={12} />
       <span className="max-w-[180px] truncate">
-        {clip.twitchCreatorLogin ? `Trusted: @${clip.twitchCreatorLogin}` : "Trusted clipper"}
+        {clip.twitchCreatorLogin ? `@${clip.twitchCreatorLogin}` : "Trusted clipper"}
       </span>
     </span>
   ) : null;
@@ -96,13 +96,13 @@ export function StandaloneClipCard({
       {categoryLabel(clip.category)}
     </span>
   );
-  const titleBadges = trustedBadge ? [trustedBadge, statusBadge, categoryBadge] : [statusBadge, categoryBadge];
-  const compactPrimaryIndex = trustedBadge ? 1 : 0;
+  const titleBadges = trustedBadge ? [trustedBadge] : [categoryBadge];
+  const compactPrimaryIndex = 0;
 
   function openEdit() {
     if (editOpen) { setEditOpen(false); return; }
     setEditTitle(clip.title);
-    setEditNotes(clip.notes);
+    setEditNotes(notesInputValue(clip.notes));
     setEditCategory(clip.category);
     setEditOpen(true);
   }
@@ -110,7 +110,7 @@ export function StandaloneClipCard({
   async function submitEdit() {
     const saved = await onUpdate(clip, {
       title: editTitle,
-      notes: editNotes,
+      notes: normaliseTaskNotes(editNotes),
       category: editCategory,
     });
     if (saved) setEditOpen(false);
@@ -121,22 +121,39 @@ export function StandaloneClipCard({
     void submitEdit();
   }
 
-  function handleResetProgress() {
-    setEditOpen(false);
-    onResetProgress(clip);
+  function handleSelectionClick(event: MouseEvent<HTMLElement>) {
+    if (!selectMode || shouldIgnoreSelectionToggle(event.target)) return;
+    onToggleSelected(clip);
   }
 
   return (
     <article
       id={taskDomId("clip", clip.id)}
       data-priority={clip.priority}
-      className={`queue-card group flex h-full flex-col overflow-hidden rounded-[14px] border bg-[#141416] ${
+      data-select-mode={selectMode}
+      data-selected={selected}
+      onClick={handleSelectionClick}
+      className={`queue-card group relative flex h-full flex-col overflow-hidden rounded-[14px] border bg-[#141416] ${
         clip.priority
           ? "border-[#facc15]/25 shadow-[0_14px_40px_rgba(0,0,0,0.18)]"
           : "border-white/[0.075]"
       }`}
     >
-      <div className="border-b border-white/[0.07] bg-black">
+      {selectMode ? (
+        <button
+          aria-label={`${selected ? "Deselect" : "Select"} ${clip.title}`}
+          aria-pressed={selected}
+          className="task-card-select-toggle"
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleSelected(clip);
+          }}
+          type="button"
+        >
+          <Check aria-hidden="true" size={15} />
+        </button>
+      ) : null}
+      <div className="relative border-b border-white/[0.07] bg-black">
         {platform === "Kick" ? (
           <KickClipPlayer clipId={clip.id} title={clip.title} url={clip.url} />
         ) : embedUrl ? (
@@ -144,6 +161,18 @@ export function StandaloneClipCard({
         ) : (
           <ExternalClipPreview title={clip.title} url={clip.url} platform={platform ?? "source"} />
         )}
+        {selectMode ? (
+          <button
+            aria-label={`${selected ? "Deselect" : "Select"} ${clip.title}`}
+            aria-pressed={selected}
+            className="task-card-media-select-cover"
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleSelected(clip);
+            }}
+            type="button"
+          />
+        ) : null}
       </div>
 
       <div className="flex flex-1 flex-col p-4 sm:p-[18px]">
@@ -203,9 +232,10 @@ export function StandaloneClipCard({
               onChange={(event) => setEditTitle(event.target.value)}
               value={editTitle}
             />
-            <textarea autoComplete="off"
+            <textarea
+              autoComplete="off"
               aria-label="Clip notes"
-              className="h-20 w-full resize-none overflow-y-auto rounded-[8px] border border-white/[0.08] bg-black/20 px-3 py-2 text-xs text-white outline-none focus:border-[#9146ff]/55"
+              className="h-16 w-full resize-none overflow-hidden rounded-[8px] border border-white/[0.08] bg-black/20 px-3 py-2 text-xs leading-5 text-white outline-none focus:border-[#9146ff]/55"
               maxLength={maxClipNotesLength}
               onChange={(event) => setEditNotes(event.target.value)}
               value={editNotes}
@@ -260,10 +290,6 @@ export function StandaloneClipCard({
               <Clock3 aria-hidden="true" className="shrink-0" size={14} />
               <span>{formatTaskDate(clip.createdAt)}</span>
             </span>
-            <span className="task-card-meta-assignee flex min-w-0 items-center gap-2">
-              <UserRound aria-hidden="true" className="shrink-0" size={14} />
-              <span className="min-w-0 truncate">{clip.assignee}</span>
-            </span>
             <span className="task-card-meta-priority flex min-w-0 items-center gap-2">
               <Tags aria-hidden="true" className="shrink-0" size={14} />
               <span>{clip.priority ? "Priority" : "Normal"}</span>
@@ -272,26 +298,19 @@ export function StandaloneClipCard({
 
           <div className="task-card-actions mt-4 border-t border-white/[0.07] pt-4">
             <div className="task-card-workflow">
-              {editOpen && clip.status !== "New" && clip.status !== "Prioritised" ? (
-                <button
-                  aria-label={`Reset progress for ${clip.title}`}
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-[8px] border border-[#f59e0b]/20 bg-[#f59e0b]/[0.06] text-[#f6c66e] hover:border-[#f59e0b]/35 hover:bg-[#f59e0b]/[0.1] disabled:cursor-not-allowed disabled:opacity-35"
-                  disabled={!canResetProgress || busyAction === `reset-clip-${clip.id}`}
-                  onClick={handleResetProgress}
-                  title={canResetProgress ? "Reset progress" : "Only the assignee or an admin can reset progress"}
-                  type="button"
-                >
-                  <RotateCcw aria-hidden="true" size={15} />
-                </button>
-              ) : null}
               <button
-                className="task-card-primary inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-[9px] bg-white px-3 text-[13px] font-bold text-[#151517] hover:bg-[#eee8f7] disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!canAdvance || busyAction === `advance-${clip.id}`}
-                onClick={() => onAdvance(clip)}
+                aria-pressed={clip.saved}
+                className={`task-card-primary inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-[9px] px-3 text-[13px] font-bold disabled:cursor-not-allowed disabled:opacity-50 ${
+                  clip.saved
+                    ? "bg-[#ff5c93] text-white hover:bg-[#ff77a7]"
+                    : "bg-white text-[#151517] hover:bg-[#eee8f7]"
+                }`}
+                disabled={busyAction === `save-${clip.id}`}
+                onClick={() => onToggleSaved(clip)}
                 type="button"
               >
-                <CheckCircle2 aria-hidden="true" className="shrink-0" size={16} />
-                {actionLabel}
+                <Heart aria-hidden="true" className="shrink-0" fill={clip.saved ? "currentColor" : "none"} size={16} />
+                {clip.saved ? "Saved" : "Save"}
               </button>
             </div>
             <a

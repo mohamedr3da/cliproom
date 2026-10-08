@@ -1,5 +1,7 @@
+import { deletedTaskRetentionDays } from "./shared.ts";
+
 export const postedRetentionMs = 24 * 60 * 60 * 1000;
-export const deletedRetentionMs = 24 * 60 * 60 * 1000;
+export const deletedRetentionMs = deletedTaskRetentionDays * 24 * 60 * 60 * 1000;
 
 export type RetentionStatement = {
   sql: string;

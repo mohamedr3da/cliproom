@@ -16,6 +16,7 @@ const clip = (overrides: Partial<Clip> = {}): Clip => ({
   twitchCreatorLogin: null,
   status: "Claimed",
   priority: false,
+  saved: false,
   assignee: "iseven",
   notes: "N/A",
   createdBy: "iseven",
@@ -26,16 +27,16 @@ const clip = (overrides: Partial<Clip> = {}): Clip => ({
   ...overrides,
 });
 
-test("My tasks is a first-class queue lane immediately after All clips", async () => {
+test("Saved is a first-class library lane immediately after All clips", async () => {
   const [shared, page] = await Promise.all([
     read("lib/cliproom/shared.ts"),
     read("app/page.tsx"),
   ]);
 
-  assert.equal(taskMatchesFilter({ kind: "clip", clip: clip() }, "mine", "iseven"), true);
-  assert.equal(taskMatchesFilter({ kind: "clip", clip: clip() }, "mine", "someone-else"), false);
-  assert.equal(taskMatchesFilter({ kind: "clip", clip: clip({ intakeSource: "trusted_sync" }) }, "mine", "iseven"), true);
-  assert.match(shared, /\{ id: "all", label: "All clips" \},\s*\{ id: "mine", label: "My tasks" \},/);
+  assert.equal(taskMatchesFilter({ kind: "clip", clip: clip({ saved: true }) }, "saved", "iseven"), true);
+  assert.equal(taskMatchesFilter({ kind: "clip", clip: clip() }, "saved", "iseven"), false);
+  assert.equal(taskMatchesFilter({ kind: "clip", clip: clip({ intakeSource: "trusted_sync", saved: true }) }, "saved", "iseven"), true);
+  assert.match(shared, /\{ id: "all", label: "All clips" \},\s*\{ id: "saved", label: "Saved" \},/);
   assert.match(page, /taskMatchesFilter\(task, categoryFilter, currentMember\?\.username \?\? ""\)/);
 });
 
@@ -68,7 +69,7 @@ test("initial room loading restores the original compact ClipRoom splash with no
 
   assert.doesNotMatch(page, /RoomLoadingSkeleton/);
   assert.match(page, /<main className="grid min-h-screen place-items-center bg-\[#0e0e10\] px-6 text-white">/);
-  assert.match(page, /h-14 w-14[\s\S]*?Opening ClipRoom[\s\S]*?Loading the private queue\./);
+  assert.match(page, /h-14 w-14[\s\S]*?Opening ClipRoom[\s\S]*?Loading the private library\./);
   assert.doesNotMatch(page, /h-1 w-24/);
   assert.doesNotMatch(page, /animate-pulse/);
 });
@@ -82,7 +83,10 @@ test("card titles use plain clamped text with no read-more overlay", async () =>
 
   assert.match(standalone, /className="task-card-title-text"/);
   assert.match(collection, /className="task-card-title-text"/);
-  assert.match(css, /\.task-card-title-text\s*\{[\s\S]*?-webkit-line-clamp:\s*2/);
+  const titleTextStart = css.indexOf(".task-card-title-text");
+  const titleTextEnd = css.indexOf("}", titleTextStart);
+  const titleTextRule = css.slice(titleTextStart, titleTextEnd);
+  assert.match(titleTextRule, /-webkit-line-clamp:\s*3/);
   assert.doesNotMatch(standalone, /overlayCollapsedControl/);
   assert.doesNotMatch(collection, /overlayCollapsedControl/);
 });

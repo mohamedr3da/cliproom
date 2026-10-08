@@ -64,6 +64,21 @@ export const auditSchemaStatements = [
     END`,
 ];
 
+export const savedTaskSchemaStatements = [
+  `CREATE TABLE IF NOT EXISTS saved_tasks (
+    member_id TEXT NOT NULL,
+    target_kind TEXT NOT NULL CHECK (target_kind IN ('clip', 'collection')),
+    target_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (member_id, target_kind, target_id),
+    FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_saved_tasks_member_created
+    ON saved_tasks (member_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_saved_tasks_target
+    ON saved_tasks (target_kind, target_id)`,
+];
+
 export const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS members (
     id TEXT PRIMARY KEY,
@@ -146,4 +161,5 @@ export const schemaStatements = [
   `CREATE INDEX IF NOT EXISTS idx_clips_category ON clips (category, created_at DESC)`,
   ...collectionSchemaStatements,
   ...auditSchemaStatements,
+  ...savedTaskSchemaStatements,
 ];

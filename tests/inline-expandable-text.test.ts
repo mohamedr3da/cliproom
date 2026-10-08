@@ -13,15 +13,21 @@ test("expandable text keeps read-more controls inline without adding a separate 
   assert.doesNotMatch(expandable, /className="mt-1 rounded text-\[11px\]/);
 });
 
-test("card note previews clamp to three lines without read-more controls", async () => {
+test("card note previews clip visually to two lines without read-more controls or forced ellipsis", async () => {
   const [standalone, collection, css] = await Promise.all([
     read("components/cliproom/StandaloneClipCard.tsx"),
     read("components/cliproom/CollectionCard.tsx"),
     read("app/globals.css"),
   ]);
+  const notesTextStart = css.indexOf(".task-card-notes-text");
+  const notesTextEnd = css.indexOf("}", notesTextStart);
+  const notesTextRule = css.slice(notesTextStart, notesTextEnd);
 
-  assert.match(css, /\.task-card-notes\s*\{[\s\S]*?min-height:\s*4\.25rem/);
-  assert.match(css, /\.task-card-notes-text\s*\{[\s\S]*?-webkit-line-clamp:\s*3/);
+  assert.match(css, /\.task-card-notes\s*\{[\s\S]*?min-height:\s*3rem/);
+  assert.match(notesTextRule, /display:\s*block/);
+  assert.match(notesTextRule, /max-height:\s*2\.5rem/);
+  assert.match(notesTextRule, /text-overflow:\s*clip/);
+  assert.doesNotMatch(notesTextRule, /-webkit-line-clamp/);
 
   for (const card of [standalone, collection]) {
     assert.match(card, /className="task-card-notes/);
@@ -38,7 +44,7 @@ test("task title surfaces retain the compact reserved height that keeps neighbou
     read("components/cliproom/CollectionCard.tsx"),
   ]);
 
-  assert.match(css, /\.task-card-title-copy\s*\{[\s\S]*?min-height:\s*2\.5rem/);
+  assert.match(css, /\.task-card-title-copy\s*\{[\s\S]*?min-height:\s*3\.75rem/);
   assert.match(css, /\.task-card-title-text\s*\{[\s\S]*?font-size:\s*0\.875rem/);
   for (const card of [standalone, collection]) {
     assert.match(card, /className="task-card-title-text"/);

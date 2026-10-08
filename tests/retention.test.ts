@@ -16,7 +16,8 @@ const now = "2026-09-12T12:00:00.000Z";
 const oldCreatedAt = "2025-01-01T00:00:00.000Z";
 const oldPostedAt = "2026-09-10T12:00:00.000Z";
 const recoverableDeletedAt = "2026-09-12T06:00:00.000Z";
-const expiredDeletedAt = "2026-09-11T12:00:00.000Z";
+const expiredDeletedAt = "2026-09-05T12:00:00.000Z";
+const lastRecoverableDeletedAt = "2026-09-05T12:00:00.001Z";
 type TaskTable = "clips" | "collections";
 type Values = Record<string, string | number | null>;
 
@@ -228,11 +229,11 @@ test("manual collection deletion marks all children while retaining content and 
   assert.deepEqual(membership(db), beforeMembership);
 });
 
-test("purge uses the 24-hour deleted timestamp boundary and preserves unrelated room data", (t) => {
+test("purge uses the 7-day deleted timestamp boundary and preserves unrelated room data", (t) => {
   const db = database(t);
   addTask(db, "clips", "expired", { deleted_at: "2026-09-01T00:00:00.000Z" });
   addTask(db, "clips", "boundary", { deleted_at: expiredDeletedAt });
-  addTask(db, "clips", "recoverable", { deleted_at: "2026-09-11T12:00:00.001Z" });
+  addTask(db, "clips", "recoverable", { deleted_at: lastRecoverableDeletedAt });
   addTask(db, "clips", "active");
   addTask(db, "clips", "invalid", { deleted_at: "not-a-date" });
   addTask(db, "clips", "recently-deleted-old-post", {
@@ -246,7 +247,7 @@ test("purge uses the 24-hour deleted timestamp boundary and preserves unrelated 
 
   assert.equal(db.prepare("SELECT id FROM clips WHERE id = 'expired'").get(), undefined);
   assert.equal(db.prepare("SELECT id FROM clips WHERE id = 'boundary'").get(), undefined);
-  assert.equal(row(db, "clips", "recoverable").deleted_at, "2026-09-11T12:00:00.001Z");
+  assert.equal(row(db, "clips", "recoverable").deleted_at, lastRecoverableDeletedAt);
   assert.equal(row(db, "clips", "active").deleted_at, null);
   assert.equal(row(db, "clips", "invalid").deleted_at, "not-a-date");
   assert.equal(row(db, "clips", "recently-deleted-old-post").deleted_at, recoverableDeletedAt);
@@ -330,10 +331,10 @@ test("standalone restore rejects expired, active, invalid, and grouped records",
   execute(db, buildRestoreStatements("clip", "missing", now));
 });
 
-test("restore remains available one millisecond before the 24-hour deadline", (t) => {
+test("restore remains available one millisecond before the 7-day deadline", (t) => {
   const db = database(t);
   for (const [kind, table] of [["clip", "clips"], ["collection", "collections"]] as const) {
-    addTask(db, table, "last-moment", { deleted_at: "2026-09-11T12:00:00.001Z" });
+    addTask(db, table, "last-moment", { deleted_at: lastRecoverableDeletedAt });
 
     execute(db, buildRestoreStatements(kind, "last-moment", now));
 

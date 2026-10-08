@@ -72,8 +72,8 @@ test("Twitch duplicate lookup avoids D1 LIKE patterns for clip slugs", async () 
 test("Twitch source panel is visible to clippers without editable source settings", async () => {
   const page = await source("app/page.tsx");
   const sourceStart = page.indexOf(">Twitch source<");
-  const priorityStart = page.indexOf(">Priority queue<", sourceStart);
-  const sourcePanel = page.slice(sourceStart, priorityStart);
+  const teamStart = page.indexOf(">Team<", sourceStart);
+  const sourcePanel = page.slice(sourceStart, teamStart);
 
   assert.match(sourcePanel, /aria-label="Twitch channel value"/);
   assert.match(sourcePanel, /aria-label="Trusted Twitch clippers value"/);

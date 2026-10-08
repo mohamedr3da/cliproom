@@ -1,7 +1,6 @@
 import type {
   CategoryFilter,
   Clip,
-  ClipStatus,
   Collection,
   RoomState,
 } from "./shared.ts";
@@ -13,16 +12,12 @@ export type QueueTask =
 
 export type QueueViewOptions = {
   priority: "all" | "priority" | "normal";
-  assignment: "all" | "unclaimed" | "claimed" | "mine";
-  status: "all" | ClipStatus;
   kind: "all" | "clip" | "collection";
   sort: "queue" | "newest" | "oldest";
 };
 
 export const defaultQueueViewOptions: QueueViewOptions = {
   priority: "all",
-  assignment: "all",
-  status: "all",
   kind: "all",
   sort: "queue",
 };
@@ -30,7 +25,6 @@ export const defaultQueueViewOptions: QueueViewOptions = {
 export type QueueCounts = Record<CategoryFilter | "posted", number> & {
   priority: number;
   active: number;
-  claimed: number;
 };
 
 const statusOrder = {
@@ -75,20 +69,18 @@ export function taskMatchesOptions(
   options: QueueViewOptions,
   username: string,
 ) {
+  void username;
   const taskValue = task.kind === "clip" ? task.clip : task.collection;
   if (options.priority === "priority" && !taskValue.priority) return false;
   if (options.priority === "normal" && taskValue.priority) return false;
-  if (options.assignment === "unclaimed" && taskValue.assignee !== "Unclaimed") return false;
-  if (options.assignment === "claimed" && taskValue.assignee === "Unclaimed") return false;
-  if (options.assignment === "mine" && taskValue.assignee !== username) return false;
-  if (options.status !== "all" && taskValue.status !== options.status) return false;
   if (options.kind !== "all" && task.kind !== options.kind) return false;
   return true;
 }
 
 export function taskMatchesFilter(task: QueueTask, filter: CategoryFilter, username = "") {
+  void username;
   const taskValue = task.kind === "clip" ? task.clip : task.collection;
-  if (filter === "mine") return Boolean(username) && taskValue.assignee === username;
+  if (filter === "saved") return taskValue.saved;
 
   if (task.kind === "clip") {
     if (filter === "all") return task.clip.intakeSource !== "trusted_sync";
@@ -114,8 +106,6 @@ function taskSearchValues(taskValue: Clip | Collection) {
   return [
     taskValue.title,
     taskValue.notes,
-    taskValue.assignee,
-    taskValue.status,
     categories.find((category) => category.id === taskValue.category)?.label.replace(/\//g, " ") ?? "",
     ...("twitchCreatorLogin" in taskValue
       ? [taskValue.twitchCreatorLogin ?? ""]
@@ -148,7 +138,7 @@ export function getQueueCounts(tasks: QueueTask[], username = ""): QueueCounts {
 
   return {
     all: countFilter("all"),
-    mine: countFilter("mine"),
+    saved: countFilter("saved"),
     trusted: countFilter("trusted"),
     social: countFilter("social"),
     news: countFilter("news"),
@@ -157,7 +147,6 @@ export function getQueueCounts(tasks: QueueTask[], username = ""): QueueCounts {
     posted: tasks.filter((task) => taskValue(task).status === "Posted").length,
     priority: tasks.filter((task) => taskValue(task).priority).length,
     active: tasks.filter((task) => taskValue(task).status !== "Posted").length,
-    claimed: tasks.filter((task) => taskValue(task).assignee !== "Unclaimed").length,
   };
 }
 

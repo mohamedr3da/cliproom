@@ -3,7 +3,7 @@ import test from "node:test";
 import type { Clip, Collection, RoomMutation, RoomState } from "../lib/cliproom/shared.ts";
 import { applyRoomMutation } from "../lib/cliproom/room-mutations.ts";
 
-const clip = (id: string, changes: Partial<Clip> = {}): Clip => ({ id, title: id, url: `https://clips.twitch.tv/${id}`, category: "social", intakeSource: "manual", twitchCreatorLogin: null, status: "New", priority: false, assignee: "Unclaimed", notes: "", createdBy: null, createdAt: "2026-09-05T00:00:00Z", updatedAt: "2026-09-05T00:00:00Z", claimedAt: null, postedAt: null, ...changes });
+const clip = (id: string, changes: Partial<Clip> = {}): Clip => ({ id, title: id, url: `https://clips.twitch.tv/${id}`, category: "social", intakeSource: "manual", twitchCreatorLogin: null, status: "New", priority: false, saved: false, assignee: "Unclaimed", notes: "", createdBy: null, createdAt: "2026-09-05T00:00:00Z", updatedAt: "2026-09-05T00:00:00Z", claimedAt: null, postedAt: null, ...changes });
 const base: RoomState = { member: { id: "editor", username: "editor", displayName: "Editor", avatarUrl: null, role: "Admin" }, clips: [clip("a"), clip("b")], collections: [], members: [], sourceChannel: "channel", trustedClipperLogins: ["trusted"], memberCount: 1, onlineMemberCount: 1, maxMembers: 20, twitchSyncAvailable: true };
 const patch = (changes: Partial<RoomMutation>): RoomMutation => ({ kind: "mutation", clips: [], collections: [], removedClipIds: [], removedCollectionIds: [], ...changes });
 

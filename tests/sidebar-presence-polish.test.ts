@@ -30,42 +30,44 @@ test("room state reports an online member count from recent last-seen activity",
   assert.match(server, /onlineMemberCount:/);
 
   const statsStart = page.indexOf(">Room stats<");
-  const statsEnd = page.indexOf("Private workspace for your creator team.", statsStart);
+  const statsEnd = page.indexOf("Private clip library for your creator team.", statsStart);
   const stats = page.slice(statsStart, statsEnd);
   assert.match(stats, /\["Online", roomState\.onlineMemberCount/);
   assert.match(stats, /bg-emerald-400/);
   const clipsIndex = stats.indexOf('["Clips", counts.all');
   const trustedIndex = stats.indexOf('["Trusted", counts.trusted');
+  const savedIndex = stats.indexOf('["Saved", counts.saved');
   const priorityIndex = stats.indexOf('["Priority", priorityTasks.length');
   const postedIndex = stats.indexOf('["Posted", counts.posted');
   const membersIndex = stats.indexOf('["Members", roomState.memberCount');
   const onlineIndex = stats.indexOf('["Online", roomState.onlineMemberCount');
 
-  for (const index of [clipsIndex, trustedIndex, priorityIndex, postedIndex, membersIndex, onlineIndex]) assert.ok(index !== -1);
+  for (const index of [clipsIndex, trustedIndex, savedIndex, priorityIndex, postedIndex, membersIndex, onlineIndex]) assert.ok(index !== -1);
   assert.ok(clipsIndex < trustedIndex);
-  assert.ok(trustedIndex < priorityIndex);
+  assert.ok(trustedIndex < savedIndex);
+  assert.ok(savedIndex < priorityIndex);
   assert.ok(priorityIndex < postedIndex);
   assert.ok(postedIndex < membersIndex);
   assert.ok(membersIndex < onlineIndex);
 });
 
-test("task metadata preserves date and priority while only assignee truncates", async () => {
+test("library metadata preserves date and priority without assignment copy", async () => {
   const [css, standalone, collection] = await Promise.all([
     read("app/globals.css"),
     read("components/cliproom/StandaloneClipCard.tsx"),
     read("components/cliproom/CollectionCard.tsx"),
   ]);
 
-  assert.match(css, /\.task-card-meta\s*\{[\s\S]*?grid-template-columns:\s*max-content\s+minmax\(0,\s*1fr\)\s+max-content/);
+  assert.match(css, /\.task-card-meta\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)\s+max-content/);
   for (const card of [standalone, collection]) {
     assert.match(card, /className="task-card-meta/);
     assert.match(card, /task-card-meta-date/);
-    assert.match(card, /task-card-meta-assignee/);
+    assert.doesNotMatch(card, /task-card-meta-assignee/);
     assert.match(card, /task-card-meta-priority/);
   }
 });
 
-test("reset progress sits beside the workflow action rather than inside the edit form", async () => {
+test("library cards use saved heart actions instead of workflow reset controls", async () => {
   for (const path of ["components/cliproom/StandaloneClipCard.tsx", "components/cliproom/CollectionCard.tsx"]) {
     const card = await read(path);
     const formStart = card.indexOf("{editOpen ? (");
@@ -75,17 +77,18 @@ test("reset progress sits beside the workflow action rather than inside the edit
 
     assert.doesNotMatch(editForm, /Reset progress/);
     assert.match(actions, /task-card-workflow/);
-    assert.match(actions, /editOpen[\s\S]*Reset progress/);
-    assert.ok(actions.indexOf("Reset progress") < actions.indexOf("task-card-primary"));
+    assert.match(actions, /Heart/);
+    assert.match(actions, /onToggleSaved/);
+    assert.doesNotMatch(actions, /Reset progress/);
   }
 });
 
-test("reset progress closes card edit mode before the task mutation can reorder it", async () => {
+test("library cards have no workflow reset handler left open during editing", async () => {
   for (const path of ["components/cliproom/StandaloneClipCard.tsx", "components/cliproom/CollectionCard.tsx"]) {
     const card = await read(path);
-    assert.match(card, /function handleResetProgress\(\)/);
-    assert.match(card, /function handleResetProgress\(\)\s*\{[\s\S]*?setEditOpen\(false\);[\s\S]*?onResetProgress\(/);
-    assert.match(card, /onClick=\{handleResetProgress\}/);
+    assert.doesNotMatch(card, /function handleResetProgress\(\)/);
+    assert.doesNotMatch(card, /onResetProgress/);
+    assert.doesNotMatch(card, /Reset progress/);
   }
 });
 
@@ -97,9 +100,12 @@ test("task titles stay capped and plain across normal and collapsed card grids",
     read("app/globals.css"),
   ]);
 
-  assert.match(shared, /maxClipTitleLength\s*=\s*60/);
-  assert.match(shared, /maxCollectionTitleLength\s*=\s*60/);
-  assert.match(css, /\.task-card-title-text\s*\{[\s\S]*?-webkit-line-clamp:\s*2/);
+  assert.match(shared, /maxClipTitleLength\s*=\s*120/);
+  assert.match(shared, /maxCollectionTitleLength\s*=\s*120/);
+  const titleTextStart = css.indexOf(".task-card-title-text");
+  const titleTextEnd = css.indexOf("}", titleTextStart);
+  const titleTextRule = css.slice(titleTextStart, titleTextEnd);
+  assert.match(titleTextRule, /-webkit-line-clamp:\s*3/);
   for (const card of [standalone, collection]) {
     assert.match(card, /task-card-title-block/);
     assert.match(card, /task-card-title-row/);

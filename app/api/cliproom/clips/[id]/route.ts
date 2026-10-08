@@ -11,6 +11,7 @@ import {
   resetClipProgress,
   restoreClip,
   toggleClipPriority,
+  toggleClipSaved,
   updateClipDetails,
   wantsMutationResponse,
 } from "@/lib/cliproom/server";
@@ -41,6 +42,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     if (input.action === "resetProgress") return jsonOk(await resetClipProgress(member, clipId, compact));
     if (input.action === "advance") return jsonOk(await advanceClip(member, clipId, compact));
     if (input.action === "togglePriority") return jsonOk(await toggleClipPriority(member, clipId, compact));
+    if (input.action === "toggleSaved") return jsonOk(await toggleClipSaved(member, clipId, compact));
     if (input.action === "updateDetails") return jsonOk(await updateClipDetails(member, clipId, input, compact));
     throw new HttpError(400, "That clip action is not supported.");
   } catch (error) {

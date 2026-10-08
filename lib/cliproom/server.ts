@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { mergeKickMetadata, parseKickChannelClipMetadata, parseKickMetadata } from "@/lib/cliproom/kick-playback";
 
-import { auditSchemaStatements, collectionSchemaStatements, schemaStatements } from "@/db/schema";
+import { auditSchemaStatements, collectionSchemaStatements, savedTaskSchemaStatements, schemaStatements } from "@/db/schema";
 import {
   buildPermanentDeleteStatements,
   buildRetentionStatements,
@@ -66,6 +66,8 @@ const retentionSchemaVersionSettingKey = "_cliproom_retention_schema_version";
 const currentRetentionSchemaVersion = "retention-v2";
 const auditSchemaVersionSettingKey = "_cliproom_audit_schema_version";
 const currentAuditSchemaVersion = "audit-v2";
+const savedSchemaVersionSettingKey = "_cliproom_saved_schema_version";
+const currentSavedSchemaVersion = "saved-v1";
 const firstAdminClaimSettingKey = "_cliproom_first_admin_claim";
 const twitchSyncRoomCooldownMs = 5 * 1000;
 const twitchSyncMemberCooldownMs = 5 * 1000;
@@ -117,6 +119,7 @@ type D1ClipRow = {
   twitch_creator_login?: string | null;
   status: ClipStatus;
   priority: number;
+  saved?: number | boolean | null;
   assignee: string;
   assignee_member_id: string | null;
   notes: string;
@@ -137,6 +140,7 @@ type D1CollectionRow = {
   category: Category;
   status: ClipStatus;
   priority: number;
+  saved?: number | boolean | null;
   assignee: string;
   assignee_member_id: string | null;
   notes: string;
@@ -333,6 +337,7 @@ function clipFromRow(row: D1ClipRow): Clip {
     twitchCreatorLogin: row.twitch_creator_login ?? null,
     status: row.status,
     priority: Boolean(row.priority),
+    saved: Boolean(row.saved),
     assignee: row.assignee,
     notes: normaliseTaskNotes(row.notes),
     createdBy: row.created_by_display_name ?? null,
@@ -352,6 +357,7 @@ function collectionFromRow(row: D1CollectionRow, clips: Clip[]): Collection {
     category: row.category,
     status: row.status,
     priority: Boolean(row.priority),
+    saved: Boolean(row.saved),
     assignee: row.assignee,
     notes: normaliseTaskNotes(row.notes),
     createdBy: row.created_by_display_name ?? null,
@@ -629,6 +635,14 @@ async function ensureAuditSchema(db: D1Database) {
   await setSetting(db, auditSchemaVersionSettingKey, currentAuditSchemaVersion);
 }
 
+async function ensureSavedSchema(db: D1Database) {
+  if ((await getSetting(db, savedSchemaVersionSettingKey)) === currentSavedSchemaVersion) return;
+
+  const statements = savedTaskSchemaStatements.map((statement) => db.prepare(statement));
+  if (statements.length) await db.batch(statements);
+  await setSetting(db, savedSchemaVersionSettingKey, currentSavedSchemaVersion);
+}
+
 export async function ensureDatabase(db = getDatabase()) {
   if (!databaseReadyPromise) {
     databaseReadyPromise = (async () => {
@@ -636,6 +650,7 @@ export async function ensureDatabase(db = getDatabase()) {
       await ensureCollectionsSchema(db);
       await ensureRetentionSchema(db);
       await ensureAuditSchema(db);
+      await ensureSavedSchema(db);
     })().catch((error) => {
       databaseReadyPromise = null;
       throw error;
@@ -1267,20 +1282,29 @@ async function taskResponse<Compact extends boolean>(
   await Promise.all([
     ...Array.from(new Set(changed.clipIds)).map(async (id) => {
       const row = await db.prepare(`SELECT clips.*,
+        EXISTS (
+          SELECT 1 FROM saved_tasks st
+          WHERE st.member_id = ? AND st.target_kind = 'clip' AND st.target_id = clips.id
+        ) AS saved,
         ${memberDisplaySelect("clips", "created_by")} AS created_by_display_name,
         ${memberDisplaySelect("clips", "deleted_by_member_id")} AS deleted_by_username
         FROM clips WHERE id = ?
-        AND NOT EXISTS (SELECT 1 FROM collection_clips cc WHERE cc.clip_id = clips.id)`).bind(id).first<D1ClipRow>();
+        AND NOT EXISTS (SELECT 1 FROM collection_clips cc WHERE cc.clip_id = clips.id)`).bind(actor.id, id).first<D1ClipRow>();
       if (row) clips.push(clipFromRow(row));
       else removedClipIds.add(id);
     }),
     ...Array.from(new Set(changed.collectionIds)).map(async (id) => {
       const result = await db.batch([
         db.prepare(`SELECT collections.*,
+          EXISTS (
+            SELECT 1 FROM saved_tasks st
+            WHERE st.member_id = ? AND st.target_kind = 'collection' AND st.target_id = collections.id
+          ) AS saved,
           ${memberDisplaySelect("collections", "created_by")} AS created_by_display_name,
           ${memberDisplaySelect("collections", "deleted_by_member_id")} AS deleted_by_username
-          FROM collections WHERE id = ?`).bind(id),
+          FROM collections WHERE id = ?`).bind(actor.id, id),
         db.prepare(`SELECT clips.*,
+          0 AS saved,
           ${memberDisplaySelect("clips", "created_by")} AS created_by_display_name,
           ${memberDisplaySelect("clips", "deleted_by_member_id")} AS deleted_by_username
           FROM collection_clips cc JOIN clips ON clips.id = cc.clip_id
@@ -1308,17 +1332,26 @@ export async function getRoomState(member: CurrentMember): Promise<RoomState> {
   const onlineSince = new Date(Date.now() - onlineWindowMs).toISOString();
   const statements = [
     db.prepare(`SELECT clips.*,
+      EXISTS (
+        SELECT 1 FROM saved_tasks st
+        WHERE st.member_id = ? AND st.target_kind = 'clip' AND st.target_id = clips.id
+      ) AS saved,
       ${memberDisplaySelect("clips", "created_by")} AS created_by_display_name,
       ${memberDisplaySelect("clips", "deleted_by_member_id")} AS deleted_by_username
       FROM clips WHERE NOT EXISTS (SELECT 1 FROM collection_clips cc WHERE cc.clip_id = clips.id)
       ORDER BY priority DESC, CASE status WHEN 'New' THEN 0 WHEN 'Prioritised' THEN 1 WHEN 'Claimed' THEN 2
-      WHEN 'Editing' THEN 3 WHEN 'Posted' THEN 4 ELSE 5 END, created_at DESC`),
+      WHEN 'Editing' THEN 3 WHEN 'Posted' THEN 4 ELSE 5 END, created_at DESC`).bind(member.id),
     db.prepare(`SELECT collections.*,
+      EXISTS (
+        SELECT 1 FROM saved_tasks st
+        WHERE st.member_id = ? AND st.target_kind = 'collection' AND st.target_id = collections.id
+      ) AS saved,
       ${memberDisplaySelect("collections", "created_by")} AS created_by_display_name,
       ${memberDisplaySelect("collections", "deleted_by_member_id")} AS deleted_by_username
       FROM collections ORDER BY priority DESC, CASE status WHEN 'New' THEN 0 WHEN 'Prioritised' THEN 1 WHEN 'Claimed' THEN 2
-      WHEN 'Editing' THEN 3 WHEN 'Posted' THEN 4 ELSE 5 END, created_at DESC`),
+      WHEN 'Editing' THEN 3 WHEN 'Posted' THEN 4 ELSE 5 END, created_at DESC`).bind(member.id),
     db.prepare(`SELECT cc.collection_id, cc.position, clips.*,
+      0 AS saved,
       ${memberDisplaySelect("clips", "created_by")} AS created_by_display_name,
       ${memberDisplaySelect("clips", "deleted_by_member_id")} AS deleted_by_username
       FROM collection_clips cc
@@ -1791,6 +1824,41 @@ async function getCollection(db: D1Database, collectionId: string) {
     .first<D1CollectionRow>();
 }
 
+async function toggleSavedTask(
+  db: D1Database,
+  actor: CurrentMember,
+  targetKind: "clip" | "collection",
+  targetId: string,
+) {
+  const existing = await db
+    .prepare(
+      `SELECT target_id FROM saved_tasks
+       WHERE member_id = ? AND target_kind = ? AND target_id = ?`,
+    )
+    .bind(actor.id, targetKind, targetId)
+    .first<{ target_id: string }>();
+
+  if (existing) {
+    await db
+      .prepare(
+        `DELETE FROM saved_tasks
+         WHERE member_id = ? AND target_kind = ? AND target_id = ?`,
+      )
+      .bind(actor.id, targetKind, targetId)
+      .run();
+    return false;
+  }
+
+  await db
+    .prepare(
+      `INSERT INTO saved_tasks (member_id, target_kind, target_id, created_at)
+       VALUES (?, ?, ?, ?)`,
+    )
+    .bind(actor.id, targetKind, targetId, nowIso())
+    .run();
+  return true;
+}
+
 async function getClipMembership(db: D1Database, clipId: string) {
   return db
     .prepare("SELECT collection_id, clip_id, position FROM collection_clips WHERE clip_id = ?")
@@ -1881,6 +1949,19 @@ export async function updateClipDetails<Compact extends boolean = false>(
     fromTitle: clip.title,
     toCategory: details.category,
   });
+  return taskResponse(actor, db, compact, { clipIds: [clipId] });
+}
+
+export async function toggleClipSaved<Compact extends boolean = false>(
+  actor: CurrentMember,
+  clipId: string,
+  compact: Compact = false as Compact,
+) {
+  const db = getDatabase();
+  await ensureDatabase(db);
+  const clip = await getStandaloneClip(db, clipId);
+  if (!clip) throw new HttpError(404, "That standalone clip was not found.");
+  await toggleSavedTask(db, actor, "clip", clipId);
   return taskResponse(actor, db, compact, { clipIds: [clipId] });
 }
 
@@ -2080,6 +2161,19 @@ export async function updateCollection<Compact extends boolean = false>(
     fromTitle: collection.title,
     toCategory: details.category,
   });
+  return taskResponse(actor, db, compact, { collectionIds: [collectionId] });
+}
+
+export async function toggleCollectionSaved<Compact extends boolean = false>(
+  actor: CurrentMember,
+  collectionId: string,
+  compact: Compact = false as Compact,
+) {
+  const db = getDatabase();
+  await ensureDatabase(db);
+  const collection = await getCollection(db, collectionId);
+  if (!collection) throw new HttpError(404, "That Collection was not found.");
+  await toggleSavedTask(db, actor, "collection", collectionId);
   return taskResponse(actor, db, compact, { collectionIds: [collectionId] });
 }
 

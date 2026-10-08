@@ -6,10 +6,10 @@ import type { FormEvent, KeyboardEvent } from "react";
 
 import {
   categories,
-  defaultTaskNotes,
   maxClipUrlLength,
   maxCollectionNotesLength,
   maxCollectionTitleLength,
+  normaliseTaskNotes,
 } from "@/lib/cliproom/shared";
 import type { Category } from "@/lib/cliproom/shared";
 
@@ -34,7 +34,7 @@ function submitParentFormOnEnter(event: KeyboardEvent<HTMLButtonElement>) {
 export function CollectionIntake({ busy, onSubmit }: Props) {
   const fieldId = useId();
   const [title, setTitle] = useState("");
-  const [notes, setNotes] = useState(defaultTaskNotes);
+  const [notes, setNotes] = useState("");
   const [category, setCategory] = useState<Category>("social");
   const [urls, setUrls] = useState([""]);
 
@@ -53,7 +53,7 @@ export function CollectionIntake({ busy, onSubmit }: Props) {
     event.preventDefault();
     await onSubmit({
       title,
-      notes,
+      notes: normaliseTaskNotes(notes),
       category,
       urls: urls.map((url) => url.trim()).filter(Boolean),
     });
@@ -119,7 +119,7 @@ export function CollectionIntake({ busy, onSubmit }: Props) {
           </label>
           <textarea
             autoComplete="off"
-            className="h-24 w-full resize-none overflow-y-auto rounded-[10px] border border-white/[0.08] bg-black/20 px-3 py-2.5 text-sm text-white outline-none placeholder:text-white/22 focus:border-[#9146ff]/60 focus:bg-white/[0.045]"
+            className="h-[4.5rem] w-full resize-none overflow-hidden rounded-[10px] border border-white/[0.08] bg-black/20 px-3 py-2.5 text-sm leading-5 text-white outline-none placeholder:text-white/22 focus:border-[#9146ff]/60 focus:bg-white/[0.045]"
             id={`${fieldId}-notes`}
             maxLength={maxCollectionNotesLength}
             onChange={(event) => setNotes(event.target.value)}

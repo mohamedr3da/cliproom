@@ -50,7 +50,7 @@ test("blank manual titles resolve from the source before they enter the queue", 
 test("re-adding a recently deleted standalone clip offers restore or cancel", async () => {
   const page = await read("app/page.tsx");
   assert.match(page, /restoreCandidate/);
-  assert.match(page, /This clip was recently deleted\. Restore it to the queue\?/);
+  assert.match(page, /This clip was recently deleted\. Restore it to the library\?/);
   assert.match(page, />Restore</);
   assert.match(page, />Cancel</);
 });

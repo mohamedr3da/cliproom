@@ -150,3 +150,17 @@ CREATE TRIGGER IF NOT EXISTS audit_logs_prune_after_insert
     DELETE FROM audit_logs
     WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-90 days');
   END;
+
+CREATE TABLE IF NOT EXISTS saved_tasks (
+  member_id TEXT NOT NULL,
+  target_kind TEXT NOT NULL CHECK (target_kind IN ('clip', 'collection')),
+  target_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (member_id, target_kind, target_id),
+  FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_saved_tasks_member_created
+  ON saved_tasks (member_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_saved_tasks_target
+  ON saved_tasks (target_kind, target_id);

@@ -27,8 +27,14 @@ test("card title spacing moves the new title strip away from controls and closer
 
   assert.match(css, /\.task-card-title-block\s*\{[\s\S]*?margin-bottom:\s*0\.25rem/);
   assert.match(css, /\.task-card-title-row\s*\{[\s\S]*?margin-bottom:\s*0\.5rem/);
-  assert.match(css, /\.task-card-title-copy\s*\{[\s\S]*?min-height:\s*2\.5rem/);
-  assert.match(css, /\.task-card-title-text\s*\{[\s\S]*?-webkit-line-clamp:\s*2/);
+  const titleCopyStart = css.indexOf(".task-card-title-copy");
+  const titleCopyEnd = css.indexOf("}", titleCopyStart);
+  const titleCopyRule = css.slice(titleCopyStart, titleCopyEnd);
+  const titleTextStart = css.indexOf(".task-card-title-text");
+  const titleTextEnd = css.indexOf("}", titleTextStart);
+  const titleTextRule = css.slice(titleTextStart, titleTextEnd);
+  assert.match(titleCopyRule, /min-height:\s*3\.75rem/);
+  assert.match(titleTextRule, /-webkit-line-clamp:\s*3/);
   for (const card of [standalone, collection]) {
     assert.match(card, /className="task-card-title-block"/);
     assert.match(card, /className="task-card-title-text"/);

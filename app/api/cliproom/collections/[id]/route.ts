@@ -11,6 +11,7 @@ import {
   resetCollectionProgress,
   restoreCollection,
   toggleCollectionPriority,
+  toggleCollectionSaved,
   updateCollection,
   wantsMutationResponse,
 } from "@/lib/cliproom/server";
@@ -50,6 +51,9 @@ export async function PATCH(request: Request, context: RouteContext) {
     }
     if (input.action === "togglePriority") {
       return jsonOk(await toggleCollectionPriority(member, collectionId, compact));
+    }
+    if (input.action === "toggleSaved") {
+      return jsonOk(await toggleCollectionSaved(member, collectionId, compact));
     }
     if (input.action === "update") {
       return jsonOk(await updateCollection(member, collectionId, input, compact));

@@ -1,6 +1,6 @@
 export type Category = "social" | "news" | "gameplay" | "other";
 export type ClipIntakeSource = "manual" | "trusted_sync";
-export type CategoryFilter = "all" | "mine" | "trusted" | Category;
+export type CategoryFilter = "all" | "saved" | "trusted" | Category;
 export type ClipStatus = "New" | "Prioritised" | "Claimed" | "Editing" | "Posted";
 export type MemberRole = "Admin" | "Clipper";
 
@@ -13,6 +13,7 @@ export type Clip = {
   twitchCreatorLogin: string | null;
   status: ClipStatus;
   priority: boolean;
+  saved: boolean;
   assignee: string;
   notes: string;
   createdBy: string | null;
@@ -30,6 +31,7 @@ export type Collection = {
   category: Category;
   status: ClipStatus;
   priority: boolean;
+  saved: boolean;
   assignee: string;
   notes: string;
   createdBy: string | null;
@@ -107,16 +109,17 @@ export const maxMembers = 20;
 export const defaultChannel = "rawdogmoon";
 export const defaultEmbedHost = "cliproom.sevencliproom.workers.dev";
 export const maxClipUrlLength = 1000;
-export const maxClipTitleLength = 60;
-export const maxClipNotesLength = 500;
-export const maxCollectionTitleLength = 60;
-export const maxCollectionNotesLength = 500;
+export const maxClipTitleLength = 120;
+export const maxClipNotesLength = 92;
+export const maxCollectionTitleLength = 120;
+export const maxCollectionNotesLength = 92;
 export const maxTaskTitleSegmentLength = 14;
 export const maxTwitchLoginLength = 25;
 export const maxTrustedClippers = 20;
 export const maxTrustedClippersTextLength = 600;
 export const defaultTaskNotes = "N/A";
 export const auditLogRetentionDays = 90;
+export const deletedTaskRetentionDays = 7;
 
 export function normaliseTaskNotes(value: unknown) {
   const notes = typeof value === "string" ? value.trim() : "";
@@ -160,7 +163,7 @@ export const categories: { id: Category; label: string }[] = [
 
 export const filters: { id: CategoryFilter; label: string }[] = [
   { id: "all", label: "All clips" },
-  { id: "mine", label: "My tasks" },
+  { id: "saved", label: "Saved" },
   { id: "trusted", label: "Trusted clippers" },
   ...categories,
 ];

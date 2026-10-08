@@ -1,44 +1,42 @@
 "use client";
 
 import {
-  CheckCircle2,
+  Check,
   ChevronLeft,
   ChevronRight,
   Clapperboard,
   Clock3,
   ExternalLink,
+  Heart,
   Layers3,
   Pencil,
   Plus,
-  RotateCcw,
   ShieldCheck,
   Star,
   Tags,
   Trash2,
-  UserRound,
   X,
 } from "lucide-react";
 import { useState } from "react";
 import { taskDomId } from "@/lib/cliproom/task-helpers";
-import type { FormEvent, KeyboardEvent } from "react";
+import type { FormEvent, KeyboardEvent, MouseEvent } from "react";
 
 import {
   categories,
   collectionClipLabel,
+  defaultTaskNotes,
   formatTaskTitleForDisplay,
   getClipEmbedUrl,
   getClipPlatform,
   maxClipUrlLength,
   maxCollectionNotesLength,
   maxCollectionTitleLength,
+  normaliseTaskNotes,
 } from "@/lib/cliproom/shared";
 import type { Category, Clip, Collection } from "@/lib/cliproom/shared";
 import {
-  canAdvanceTask,
   categoryLabel,
   formatTaskDate,
-  statusStyles,
-  taskActionLabel,
 } from "@/components/cliproom/task-card-shared";
 import { KickClipPlayer } from "@/components/cliproom/KickClipPlayer";
 import { TaskInfoPopover } from "@/components/cliproom/TaskInfoPopover";
@@ -47,13 +45,14 @@ import { TwitchEmbedFrame, ExternalClipPreview } from "@/components/cliproom/Twi
 
 type Props = {
   collection: Collection;
-  currentUsername: string;
   isAdmin: boolean;
   embedHost: string;
   busyAction: string | null;
-  onAdvance: (collection: Collection) => void;
-  onResetProgress: (collection: Collection) => void;
+  selectMode: boolean;
+  selected: boolean;
   onDelete: (collection: Collection) => void;
+  onToggleSelected: (collection: Collection) => void;
+  onToggleSaved: (collection: Collection) => void;
   onTogglePriority: (collection: Collection) => void;
   onAddClip: (collection: Collection, url: string) => Promise<boolean>;
   onRemoveClip: (collection: Collection, clip: Clip) => void;
@@ -70,15 +69,24 @@ function submitParentFormOnEnter(event: KeyboardEvent<HTMLButtonElement>) {
   event.currentTarget.form?.requestSubmit();
 }
 
+function shouldIgnoreSelectionToggle(target: EventTarget | null) {
+  return target instanceof Element && Boolean(target.closest("a,button,input,textarea,select,label"));
+}
+
+function notesInputValue(notes: string) {
+  return notes === defaultTaskNotes ? "" : notes;
+}
+
 export function CollectionCard({
   collection,
-  currentUsername,
   isAdmin,
   embedHost,
   busyAction,
-  onAdvance,
-  onResetProgress,
+  selectMode,
+  selected,
   onDelete,
+  onToggleSelected,
+  onToggleSaved,
   onTogglePriority,
   onAddClip,
   onRemoveClip,
@@ -102,9 +110,6 @@ export function CollectionCard({
   const embedUrl = selectedClip && selectedPlatform === "Twitch" ? getClipEmbedUrl(selectedClip.url, embedHost) : null;
   const selectedClipLabel = selectedClip ? collectionClipLabel(selectedClip, selectedIndex) : "";
   const containsTrustedClip = collection.clips.some((clip) => clip.intakeSource === "trusted_sync");
-  const actionLabel = taskActionLabel(collection, currentUsername, isAdmin);
-  const canAdvance = canAdvanceTask(collection, currentUsername, isAdmin);
-  const canResetProgress = isAdmin || collection.assignee === currentUsername;
   const collectionBadge = (
     <span className="inline-flex items-center gap-1 rounded border border-[#9146ff]/35 bg-[#9146ff]/12 px-2.5 py-1 text-xs font-semibold text-[#d8c6ff]">
       <Clapperboard aria-hidden="true" size={12} />
@@ -117,25 +122,20 @@ export function CollectionCard({
       Trusted source
     </span>
   ) : null;
-  const statusBadge = (
-    <span className={`rounded border px-2.5 py-1 text-xs font-semibold ${statusStyles[collection.status]}`}>
-      {collection.status}
-    </span>
-  );
   const categoryBadge = (
     <span className="rounded border border-white/10 bg-white/[0.055] px-2.5 py-1 text-xs text-white/56">
       {categoryLabel(collection.category)}
     </span>
   );
   const titleBadges = trustedBadge
-    ? [collectionBadge, trustedBadge, statusBadge, categoryBadge]
-    : [collectionBadge, statusBadge, categoryBadge];
-  const compactPrimaryIndex = trustedBadge ? 2 : 1;
+    ? [collectionBadge, trustedBadge]
+    : [collectionBadge, categoryBadge];
+  const compactPrimaryIndex = 0;
 
   function openEdit() {
     if (editOpen) { setEditOpen(false); return; }
     setEditTitle(collection.title);
-    setEditNotes(collection.notes);
+    setEditNotes(notesInputValue(collection.notes));
     setEditCategory(collection.category);
     setEditOpen(true);
   }
@@ -157,7 +157,7 @@ export function CollectionCard({
   async function submitEdit() {
     const saved = await onUpdate(collection, {
       title: editTitle,
-      notes: editNotes,
+      notes: normaliseTaskNotes(editNotes),
       category: editCategory,
     });
     if (saved) setEditOpen(false);
@@ -168,22 +168,39 @@ export function CollectionCard({
     void submitEdit();
   }
 
-  function handleResetProgress() {
-    setEditOpen(false);
-    onResetProgress(collection);
+  function handleSelectionClick(event: MouseEvent<HTMLElement>) {
+    if (!selectMode || shouldIgnoreSelectionToggle(event.target)) return;
+    onToggleSelected(collection);
   }
 
   return (
     <article
       id={taskDomId("collection", collection.id)}
       data-priority={collection.priority}
-      className={`queue-card group flex h-full flex-col overflow-hidden rounded-[14px] border bg-[#141416] ${
+      data-select-mode={selectMode}
+      data-selected={selected}
+      onClick={handleSelectionClick}
+      className={`queue-card group relative flex h-full flex-col overflow-hidden rounded-[14px] border bg-[#141416] ${
         collection.priority
           ? "border-[#facc15]/25 shadow-[0_14px_40px_rgba(0,0,0,0.18)]"
           : "border-[#9146ff]/20"
       }`}
     >
-      <div className="border-b border-white/[0.07] bg-black">
+      {selectMode ? (
+        <button
+          aria-label={`${selected ? "Deselect" : "Select"} ${collection.title}`}
+          aria-pressed={selected}
+          className="task-card-select-toggle"
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleSelected(collection);
+          }}
+          type="button"
+        >
+          <Check aria-hidden="true" size={15} />
+        </button>
+      ) : null}
+      <div className="relative border-b border-white/[0.07] bg-black">
         {selectedClip && selectedPlatform === "Kick" ? (
           <KickClipPlayer clipId={selectedClip.id} title={selectedClipLabel} url={selectedClip.url} />
         ) : embedUrl && selectedClip ? (
@@ -199,6 +216,18 @@ export function CollectionCard({
             </div>
           </div>
         )}
+        {selectMode ? (
+          <button
+            aria-label={`${selected ? "Deselect" : "Select"} ${collection.title}`}
+            aria-pressed={selected}
+            className="task-card-media-select-cover"
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleSelected(collection);
+            }}
+            type="button"
+          />
+        ) : null}
       </div>
 
       <div className="flex flex-1 flex-col p-4 sm:p-[18px]">
@@ -261,9 +290,10 @@ export function CollectionCard({
               onChange={(event) => setEditTitle(event.target.value)}
               value={editTitle}
             />
-            <textarea autoComplete="off"
+            <textarea
+              autoComplete="off"
               aria-label="Collection notes"
-              className="h-20 w-full resize-none overflow-y-auto rounded-[8px] border border-white/[0.08] bg-black/20 px-3 py-2 text-xs text-white outline-none focus:border-[#9146ff]/55"
+              className="h-16 w-full resize-none overflow-hidden rounded-[8px] border border-white/[0.08] bg-black/20 px-3 py-2 text-xs leading-5 text-white outline-none focus:border-[#9146ff]/55"
               maxLength={maxCollectionNotesLength}
               onChange={(event) => setEditNotes(event.target.value)}
               value={editNotes}
@@ -423,10 +453,6 @@ export function CollectionCard({
               <Clock3 aria-hidden="true" className="shrink-0" size={14} />
               <span>{formatTaskDate(collection.createdAt)}</span>
             </span>
-            <span className="task-card-meta-assignee flex min-w-0 items-center gap-2">
-              <UserRound aria-hidden="true" className="shrink-0" size={14} />
-              <span className="min-w-0 truncate">{collection.assignee}</span>
-            </span>
             <span className="task-card-meta-priority flex min-w-0 items-center gap-2">
               <Tags aria-hidden="true" className="shrink-0" size={14} />
               <span>{collection.priority ? "Priority" : "Normal"}</span>
@@ -435,26 +461,19 @@ export function CollectionCard({
 
           <div className="task-card-actions mt-4 border-t border-white/[0.07] pt-4">
             <div className="task-card-workflow">
-              {editOpen && collection.status !== "New" && collection.status !== "Prioritised" ? (
-                <button
-                  aria-label={`Reset progress for ${collection.title}`}
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-[8px] border border-[#f59e0b]/20 bg-[#f59e0b]/[0.06] text-[#f6c66e] hover:border-[#f59e0b]/35 hover:bg-[#f59e0b]/[0.1] disabled:cursor-not-allowed disabled:opacity-35"
-                  disabled={!canResetProgress || busyAction === `reset-collection-${collection.id}`}
-                  onClick={handleResetProgress}
-                  title={canResetProgress ? "Reset progress" : "Only the assignee or an admin can reset progress"}
-                  type="button"
-                >
-                  <RotateCcw aria-hidden="true" size={15} />
-                </button>
-              ) : null}
               <button
-                className="task-card-primary inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-[9px] bg-white px-3 text-[13px] font-bold text-[#151517] hover:bg-[#eee8f7] disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!canAdvance || busyAction === `collection-advance-${collection.id}`}
-                onClick={() => onAdvance(collection)}
+                aria-pressed={collection.saved}
+                className={`task-card-primary inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-[9px] px-3 text-[13px] font-bold disabled:cursor-not-allowed disabled:opacity-50 ${
+                  collection.saved
+                    ? "bg-[#ff5c93] text-white hover:bg-[#ff77a7]"
+                    : "bg-white text-[#151517] hover:bg-[#eee8f7]"
+                }`}
+                disabled={busyAction === `collection-save-${collection.id}`}
+                onClick={() => onToggleSaved(collection)}
                 type="button"
               >
-                <CheckCircle2 aria-hidden="true" className="shrink-0" size={16} />
-                {actionLabel}
+                <Heart aria-hidden="true" className="shrink-0" fill={collection.saved ? "currentColor" : "none"} size={16} />
+                {collection.saved ? "Saved" : "Save"}
               </button>
             </div>
             {selectedClip ? (

@@ -22,6 +22,7 @@ const baseClip = (overrides: Partial<Clip> = {}): Clip => ({
   twitchCreatorLogin: null,
   status: "New",
   priority: false,
+  saved: false,
   assignee: "Unclaimed",
   notes: "solo note",
   createdBy: null,
@@ -38,6 +39,7 @@ const collection: Collection = {
   category: "social",
   status: "Posted",
   priority: true,
+  saved: false,
   assignee: "editor",
   notes: "Use the reaction near the end",
   createdBy: null,
@@ -76,7 +78,7 @@ test("a collection counts as one queue task regardless of child clip count", () 
   assert.equal(counts.priority, 1);
   assert.equal(counts.posted, 1);
   assert.equal(counts.active, 1);
-  assert.equal(counts.claimed, 1);
+  assert.equal(counts.saved, 0);
 });
 
 test("collection search includes child titles without matching child URLs", () => {
@@ -101,7 +103,7 @@ test("search matches every keyword across separate clip fields in any order", ()
   };
 
   assert.equal(
-    taskMatchesQuery(task, "morgan comeback editing reaction highlightmaker gameplay"),
+    taskMatchesQuery(task, "comeback reaction highlightmaker gameplay"),
     true,
   );
   assert.equal(taskMatchesQuery(task, "comeback round final"), true);
@@ -164,7 +166,7 @@ test("collection keywords can match parent fields and fields from different chil
   };
 
   assert.equal(
-    taskMatchesQuery(task, "montage interview announcement jamie editing X News firstcreator closing"),
+    taskMatchesQuery(task, "montage interview announcement X News firstcreator closing"),
     true,
   );
   assert.equal(taskMatchesQuery(task, "montage firstcreator absent"), false);
@@ -242,26 +244,18 @@ const filterTasks: QueueTask[] = [
 
 const taskId = (task: QueueTask) => task.kind === "clip" ? task.clip.id : task.collection.id;
 
-test("queue options filter task-level priority, assignment, status and kind together", () => {
+test("queue options filter task-level priority and kind together", () => {
   const cases: { options: Partial<QueueViewOptions>; ids: string[] }[] = [
     { options: {}, ids: ["new_unclaimed", "my_edit", "other_claim", "collection_one", "priority_unclaimed"] },
     { options: { priority: "priority" }, ids: ["my_edit", "collection_one", "priority_unclaimed"] },
     { options: { priority: "normal" }, ids: ["new_unclaimed", "other_claim"] },
-    { options: { assignment: "unclaimed" }, ids: ["new_unclaimed", "priority_unclaimed"] },
-    { options: { assignment: "claimed" }, ids: ["my_edit", "other_claim", "collection_one"] },
-    { options: { assignment: "mine" }, ids: ["my_edit", "collection_one"] },
-    { options: { status: "New" }, ids: ["new_unclaimed"] },
-    { options: { status: "Editing" }, ids: ["my_edit"] },
-    { options: { status: "Claimed" }, ids: ["other_claim"] },
-    { options: { status: "Posted" }, ids: ["collection_one"] },
-    { options: { status: "Prioritised" }, ids: ["priority_unclaimed"] },
     { options: { kind: "clip" }, ids: ["new_unclaimed", "my_edit", "other_claim"] },
     { options: { kind: "collection" }, ids: ["collection_one", "priority_unclaimed"] },
     {
-      options: { priority: "priority", assignment: "mine", status: "Editing", kind: "clip" },
+      options: { priority: "priority", kind: "clip" },
       ids: ["my_edit"],
     },
-    { options: { priority: "normal", assignment: "mine", kind: "collection" }, ids: [] },
+    { options: { priority: "normal", kind: "collection" }, ids: [] },
   ];
 
   for (const { options, ids } of cases) {
@@ -277,15 +271,15 @@ test("queue options filter task-level priority, assignment, status and kind toge
 test("queue options narrow the selected category or sync lane", () => {
   const options: QueueViewOptions = {
     ...defaultQueueViewOptions,
-    assignment: "mine",
+    priority: "priority",
   };
   const inLane = (lane: "all" | "trusted" | "social") => filterTasks.filter((task) =>
     taskMatchesFilter(task, lane) && taskMatchesOptions(task, options, "editor")
   ).map(taskId);
 
-  assert.deepEqual(inLane("all"), ["my_edit"]);
+  assert.deepEqual(inLane("all"), ["my_edit", "priority_unclaimed"]);
   assert.deepEqual(inLane("trusted"), ["collection_one"]);
-  assert.deepEqual(inLane("social"), ["collection_one"]);
+  assert.deepEqual(inLane("social"), ["collection_one", "priority_unclaimed"]);
 });
 
 test("date sorting ignores priority and workflow status without mutating the input", () => {

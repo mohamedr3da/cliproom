@@ -5,6 +5,8 @@ import test from "node:test";
 import {
   cleanClipTitle,
   defaultTaskNotes,
+  maxClipNotesLength,
+  maxCollectionNotesLength,
   normaliseTaskNotes,
 } from "../lib/cliproom/shared.ts";
 
@@ -12,6 +14,8 @@ const read = (path: string) => readFile(new URL(`../${path}`, import.meta.url), 
 
 test("empty task notes consistently normalise to N/A in forms, writes, and old rows", async () => {
   assert.equal(defaultTaskNotes, "N/A");
+  assert.equal(maxClipNotesLength, 92);
+  assert.equal(maxCollectionNotesLength, 92);
   assert.equal(normaliseTaskNotes(""), "N/A");
   assert.equal(normaliseTaskNotes("   "), "N/A");
   assert.equal(normaliseTaskNotes("  editing note  "), "editing note");
@@ -22,11 +26,15 @@ test("empty task notes consistently normalise to N/A in forms, writes, and old r
     read("lib/cliproom/server.ts"),
   ]);
 
-  assert.match(page, /notes:\s*defaultTaskNotes/);
-  assert.match(intake, /useState\(defaultTaskNotes\)/);
+  assert.match(page, /notes:\s*""/);
+  assert.match(page, /normaliseTaskNotes\(clipForm\.notes\)/);
+  assert.match(intake, /useState\(""\)/);
+  assert.match(intake, /normaliseTaskNotes\(notes\)/);
   assert.match(server, /notes:\s*normaliseTaskNotes\(row\.notes\)/);
   assert.match(server, /const rawNotes = normaliseTaskNotes\(input\.notes\)/);
   assert.match(server, /const notes = normaliseTaskNotes\(input\.notes\)/);
+  assert.match(server, /Clip notes must be \$\{maxClipNotesLength\} characters or fewer/);
+  assert.match(server, /Collection notes must be \$\{maxCollectionNotesLength\} characters or fewer/);
 });
 
 test("card title regions reserve the same collapsed height before notes", async () => {
@@ -38,7 +46,7 @@ test("card title regions reserve the same collapsed height before notes", async 
 
   assert.match(standalone, /task-card-title-copy/);
   assert.match(collection, /task-card-title-copy/);
-  assert.match(css, /\.task-card-title-copy\s*\{[\s\S]*?min-height:\s*2\.5rem/);
+  assert.match(css, /\.task-card-title-copy\s*\{[\s\S]*?min-height:\s*3\.75rem/);
   assert.match(standalone, /task-card-title-text/);
   assert.match(collection, /task-card-title-text/);
   assert.doesNotMatch(standalone, /overlayCollapsedControl/);
@@ -72,12 +80,13 @@ test("task info is a lightweight draggable floating panel with only useful metad
 test("Room Stats restores Clips and Trusted before the requested remaining order", async () => {
   const page = await read("app/page.tsx");
   const start = page.indexOf(">Room stats<");
-  const end = page.indexOf("Private workspace for your creator team.", start);
+  const end = page.indexOf("Private clip library for your creator team.", start);
   const stats = page.slice(start, end);
 
   const labels = [
     '["Clips", counts.all',
     '["Trusted", counts.trusted',
+    '["Saved", counts.saved',
     '["Priority", priorityTasks.length',
     '["Posted", counts.posted',
     '["Members", roomState.memberCount',
